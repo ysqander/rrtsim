@@ -40,6 +40,7 @@ body {
     flex-direction: column;
     gap: 1.5rem;
     box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    transition: all 0.3s ease;
 }
 
 .essay-panel { border-left: 4px solid #3498db; }
@@ -48,6 +49,7 @@ body {
 h1 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.5px; }
 .subtitle { margin: 0; color: #888; font-size: 0.9rem; }
 h3 { margin: 0 0 0.5rem 0; font-size: 0.8rem; text-transform: uppercase; color: #555; letter-spacing: 1px; }
+h4 { margin: 0 0 0.5rem 0; font-size: 0.75rem; color: #666; }
 
 p { font-size: 0.9rem; line-height: 1.5; color: #ccc; margin: 0; }
 .hint { font-size: 0.8rem; color: #888; font-style: italic; margin-top: 0.5rem; }
@@ -109,3 +111,79 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
 }
 
 .tiny-text { font-size: 0.7rem; color: #555; margin-top: 5px; }
+
+/* --- NEW STYLES --- */
+
+/* Stepper Navigation */
+.stepper-nav {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.stepper-nav button {
+    flex: 1;
+    text-align: center;
+    font-size: 0.75rem;
+    padding: 6px;
+}
+
+/* Content Animation */
+.step-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+}
+.fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Parameter Controls */
+.parameter-control {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 10px;
+}
+.parameter-control label {
+    font-size: 0.8rem;
+    color: #aaa;
+    font-family: 'JetBrains Mono', monospace;
+}
+.parameter-control input[type=range] {
+    width: 100%;
+    accent-color: #3498db;
+    cursor: pointer;
+}
+
+/* Nav Buttons */
+.nav-buttons {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1rem;
+    gap: 1rem;
+}
+.primary-btn {
+    background: #00ff00;
+    color: #000;
+    border-color: #00ff00;
+    font-weight: bold;
+    text-align: center;
+}
+.primary-btn:hover {
+    background: #33ff33;
+    color: #000;
+    border-color: #33ff33;
+}
+
+.placeholder-text {
+    color: #888;
+    font-style: italic;
+    border-left: 2px solid #333;
+    padding-left: 10px;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+}

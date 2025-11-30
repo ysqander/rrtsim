@@ -117,12 +117,19 @@ export class Robot {
   public addJoint() {
     // Insert a new joint before the "Tip" (last element)
     const newJointIndex = this.CONFIG.length - 1
+
+    // Get Parent (the one before the new joint)
+    const parentConfig = this.CONFIG[newJointIndex - 1]
+    // Default visual length for parent if not defined (should be defined)
+    const parentLength = parentConfig?.visualLength || 1.0
+
     const newJoint: LinkConfig = {
       name: `Joint ${newJointIndex}`,
       type: 'revolute',
-      axis: Math.random() > 0.5 ? 'z' : 'y', // Randomize axis for fun
-      offset: [0, 1.0, 0],
-      visualLength: 1.0,
+      axis: Math.random() > 0.5 ? 'z' : 'y',
+      // IMPORTANT: Offset is determined by PARENT'S length
+      offset: [0, parentLength, 0],
+      visualLength: 1.0, // Standard length for new joints
       color: Math.random() * 0xffffff,
       limit: [-2.0, 2.0],
     }
@@ -130,7 +137,38 @@ export class Robot {
     // Insert before Tip
     this.CONFIG.splice(newJointIndex, 0, newJoint)
 
+    // Update Tip's offset to match the NEW joint's length
+    const tipIndex = this.CONFIG.length - 1
+    if (this.CONFIG[tipIndex]) {
+      this.CONFIG[tipIndex]!.offset = [0, newJoint.visualLength!, 0]
+    }
+
     this.rebuild()
+  }
+
+  public removeJoint() {
+    // Ensure minimum joints (e.g., 3: Base, Waist, Tip)
+    if (this.CONFIG.length <= 4) return
+
+    // Remove the joint before Tip.
+    const removeIndex = this.CONFIG.length - 2
+
+    // Sanity check
+    if (removeIndex > 1) {
+      // Identify Parent of the removed joint
+      const parentConfig = this.CONFIG[removeIndex - 1]
+      const parentLength = parentConfig?.visualLength || 1.0
+
+      // Remove the configuration entry
+      this.CONFIG.splice(removeIndex, 1)
+
+      // Update the NEW joint at this index (Tip) to use offset matching the Parent
+      if (this.CONFIG[removeIndex]) {
+        this.CONFIG[removeIndex]!.offset = [0, parentLength, 0]
+      }
+
+      this.rebuild()
+    }
   }
 
   public resetConfig() {
@@ -264,6 +302,28 @@ export class Robot {
     })
   }
 
+  // --- NEW: Color Override for Visualization ---
+  public setOverrideColor(color: number | null) {
+    this.sceneObject.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        const mat = c.material as THREE.MeshStandardMaterial
+        // We only want to override the "Body" parts, not necessarily the red joints?
+        // Actually user said "turn red". Let's turn everything red.
+
+        // Save original if not saved
+        if (mat.userData.originalColor === undefined) {
+          mat.userData.originalColor = mat.color.getHex()
+        }
+
+        if (color !== null) {
+          mat.color.setHex(color)
+        } else {
+          mat.color.setHex(mat.userData.originalColor)
+        }
+      }
+    })
+  }
+
   // --- GENERIC FK SOLVER ---
   // Calculates the position of every link given a set of angles
   private computeFK(angles: number[]) {
@@ -349,6 +409,10 @@ export class Robot {
           const aTgt = Math.atan2(localTarget.y, localTarget.x)
           delta = aTgt - aTip
         }
+
+        // Normalize Delta to shortest path (-PI to PI)
+        while (delta > Math.PI) delta -= 2 * Math.PI
+        while (delta < -Math.PI) delta += 2 * Math.PI
 
         // D. Apply
         angles[j]! += delta

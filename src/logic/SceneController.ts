@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { Robot } from './Robot.ts'
-import { RRTPlanner } from './RRTPlanner.ts'
+import { RRTPlanner, type RRTParams } from './RRTPlanner.ts'
 
 export type PlannerStats = {
   time: number
@@ -30,6 +30,13 @@ export class SceneController {
   private pathIndex = 0
   private isPlaying = false
   private collisionDebugGroup: THREE.Group
+
+  private algorithm: 'greedy' | 'rrt' = 'rrt'
+  private rrtParams: RRTParams = {
+    stepSize: 0.05,
+    maxIter: 20000,
+    goalBias: 0.05,
+  }
 
   // Callbacks to update React UI
   public onStatsUpdate: ((stats: PlannerStats) => void) | null = null
@@ -65,6 +72,7 @@ export class SceneController {
     this.ghostRobot = new Robot()
     this.makeGhost(this.ghostRobot.sceneObject)
     this.scene.add(this.ghostRobot.sceneObject)
+    this.ghostRobot.sceneObject.visible = false // Hidden by default in new plan
 
     // Target
     this.targetMesh = new THREE.Mesh(
@@ -98,17 +106,16 @@ export class SceneController {
       if (!event.value) this.runPlanner()
     })
 
-    // Live Ghost Update while dragging
+    // Live Ghost Update while dragging - ONLY in RRT mode if desired, or Greedy mode live update
     this.transformControl.addEventListener('change', () => {
-      // Robust IK for Ghost
-      const sol = this.ghostRobot.solveRobustIK(
-        this.targetMesh.position,
-        this.obstacle
-      )
-      this.ghostRobot.setAngles(sol)
-      // Color code
-      const hit = this.ghostRobot.checkCollision(sol, this.obstacle)
-      this.colorGhost(hit)
+      if (this.algorithm === 'greedy') {
+        // Real-time update for Greedy
+        this.runPlanner()
+      } else {
+        // For RRT mode, we don't want to re-plan every frame while dragging (too heavy).
+        // But we MIGHT want to visualize the target validity?
+        // For now, do nothing until drag ends.
+      }
     })
 
     this.transformControl.attach(this.targetMesh)
@@ -135,6 +142,20 @@ export class SceneController {
     this.runPlanner()
   }
 
+  public removeJoint() {
+    this.robot.removeJoint()
+    this.ghostRobot.removeJoint()
+
+    // Re-apply ghost material
+    this.makeGhost(this.ghostRobot.sceneObject)
+
+    // Force scene graph update immediately
+    this.scene.updateMatrixWorld(true)
+
+    // Re-run planner if auto-update is desired, or just reset
+    this.runPlanner()
+  }
+
   public resetJoints() {
     this.robot.resetConfig()
     this.ghostRobot.resetConfig()
@@ -150,6 +171,7 @@ export class SceneController {
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)
       this.treeMesh.geometry.dispose()
+      this.treeMesh = null
     }
 
     if (type === 'easy') {
@@ -158,9 +180,10 @@ export class SceneController {
       this.targetMesh.position.set(2, 2, 0)
     } else if (type === 'medium') {
       // A standard wall that blocks direct line of sight
-      this.obstacle.position.set(1.0, 1.5, 0.5)
-      this.obstacle.scale.set(0.2, 2.0, 2.0) // A thin, tall, wide wall
-      this.targetMesh.position.set(2.0, 2.0, 0.5) // Just behind it
+      // Was: y=1.5, scale.y=2.0. Let's make it a bit shorter to easily see "going over"
+      this.obstacle.position.set(1.0, 1.0, 0.5) // Lower center
+      this.obstacle.scale.set(0.2, 1.5, 2.0) // Shorter height
+      this.targetMesh.position.set(2.0, 1.5, 0.5) // Just behind it
     } else if (type === 'hard') {
       // The "Mailbox" Slot
       // A wall with the target deep inside/behind, forcing the arm to snake around
@@ -171,6 +194,56 @@ export class SceneController {
 
     this.obstacle.updateMatrixWorld() // Critical update
     this.runPlanner() // Auto-run for effect
+  }
+
+  // --- NEW: Dynamic Wall Adjustment ---
+  public setObstacleHeight(height: number) {
+    // height is a scale factor essentially, or raw height?
+    // Let's treat it as raw height. Original box is 2 units high.
+    // If we scale Y, we must also move Y position so it stays on the floor (y=0)
+    // Original center is y=1, height=2.
+
+    // Scale.y = newHeight / 2 (since geometry height is 2)
+    // Actually base geometry is 2.
+    const scale = height / 2.0
+    this.obstacle.scale.y = scale
+    this.obstacle.position.y = height / 2.0
+    this.obstacle.updateMatrixWorld()
+
+    // Re-run current planner logic
+    this.runPlanner()
+  }
+
+  public setAlgorithm(mode: 'greedy' | 'rrt', reset: boolean = false) {
+    this.algorithm = mode
+    // Hide ghost in both modes as per new plan
+    this.ghostRobot.sceneObject.visible = false
+
+    // Clear trees when switching
+    if (this.treeMesh) {
+      this.scene.remove(this.treeMesh)
+      this.treeMesh.geometry.dispose()
+      this.treeMesh = null
+    }
+
+    if (reset) {
+      this.robot.setAngles([0, 0, 0, 0, 0]) // Reset to home
+      // Note: We do NOT reset the target position, so it stays in the "stuck" spot
+    }
+
+    // If switching to RRT, we want to plan immediately from the current (or reset) state to the target
+    if (mode === 'rrt') {
+      // IMPORTANT: Force a re-render of the scene state before planning to ensure matrices are updated
+      this.scene.updateMatrixWorld(true)
+      this.runPlanner()
+    }
+  }
+
+  public updateRRTParams(params: RRTParams) {
+    this.rrtParams = params
+    if (this.algorithm === 'rrt') {
+      this.runPlanner()
+    }
   }
 
   // --- NEW: DEBUG TOGGLE ---
@@ -250,9 +323,48 @@ export class SceneController {
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)
       this.treeMesh.geometry.dispose()
+      this.treeMesh = null
     }
 
-    const path = this.planner.plan(startAngles, this.targetMesh.position)
+    if (this.algorithm === 'greedy') {
+      // GREEDY IK MODE
+      // Just calculate IK and move there immediately
+      const sol = this.robot.calculateIK(this.targetMesh.position)
+      this.robot.setAngles(sol)
+
+      // Check collision
+      const hit = this.robot.checkCollision(sol, this.obstacle)
+
+      // Visual Feedback for Hit
+      if (hit) {
+        this.robot.setOverrideColor(0xff0000) // Red
+      } else {
+        this.robot.setOverrideColor(null) // Restore
+      }
+
+      // Report
+      if (this.onStatsUpdate) {
+        this.onStatsUpdate({
+          time: Math.round(performance.now() - start),
+          nodes: 0,
+          success: !hit,
+        })
+      }
+
+      this.isPlaying = false
+      this.plannedPath = []
+      return
+    }
+
+    // RRT MODE
+    // Ensure robot color is reset
+    this.robot.setOverrideColor(null)
+
+    const path = this.planner.plan(
+      startAngles,
+      this.targetMesh.position,
+      this.rrtParams
+    )
     const end = performance.now()
 
     // 1. Visualize Tree
@@ -311,7 +423,6 @@ export class SceneController {
       const node = tree[i]
       // Skip roots or malformed nodes
       if (!node || !node.parent) continue
-
       // Calculate 3D position of the Tip for start and end of the branch
       points.push(this.robot.getTipPosition(node.parent.angles))
       points.push(this.robot.getTipPosition(node.angles))
@@ -392,14 +503,6 @@ export class SceneController {
           opacity: 0.3,
         })
       }
-    })
-  }
-
-  private colorGhost(hit: boolean) {
-    const color = hit ? 0xff0000 : 0x00ff00
-    this.ghostRobot.sceneObject.traverse((c) => {
-      if (c instanceof THREE.Mesh)
-        (c.material as THREE.MeshBasicMaterial).color.setHex(color)
     })
   }
 }

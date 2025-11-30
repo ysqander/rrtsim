@@ -6,12 +6,16 @@ interface Node {
   parent: Node | null
 }
 
+export interface RRTParams {
+  stepSize: number
+  maxIter: number
+  goalBias: number
+}
+
 export class RRTPlanner {
   private robot: Robot
   private obstacle: THREE.Mesh
-  private stepSize = 0.2
   private TIME_LIMIT_MS = 1000 // Give it a full second
-  private maxIter = 10000
 
   // Visualization helper
   public lastTrees: Node[] = []
@@ -23,10 +27,12 @@ export class RRTPlanner {
 
   public plan(
     startAngles: number[],
-    targetPos: THREE.Vector3
+    targetPos: THREE.Vector3,
+    params: RRTParams = { stepSize: 0.05, maxIter: 20000, goalBias: 0.05 }
   ): number[][] | null {
     this.lastTrees = [] // Reset visualization
     const limits = this.robot.getLimits()
+    const { stepSize, maxIter, goalBias } = params
 
     // --- STEP 1: FIND A VALID GOAL (Constraint Aware IK) ---
     // We try multiple times to solve IK. If the solution hits the wall, we randomize and try again.
@@ -57,27 +63,32 @@ export class RRTPlanner {
 
     const startTime = performance.now()
 
-    for (let i = 0; i < this.maxIter; i++) {
+    for (let i = 0; i < maxIter; i++) {
       // Because this is an algorithm with potentially a very large number of iterations, we need to limit the time it can run for.
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('RRT-Connect Timeout')
         break
       }
 
-      // 1. Random Sample (Respecting joint angle limits)
-      const sample: number[] = []
-      for (let d = 0; d < limits.length; d++) {
-        const min = limits[d]![0]
-        const max = limits[d]![1]
-        sample.push(Math.random() * (max - min) + min)
+      // 1. Random Sample (Respecting joint angle limits) with Goal Bias
+      let sample: number[] = []
+      if (goalAngles && Math.random() < goalBias) {
+        sample = [...goalAngles]
+      } else {
+        // Standard Random Sample
+        for (let d = 0; d < limits.length; d++) {
+          const min = limits[d]![0]
+          const max = limits[d]![1]
+          sample.push(Math.random() * (max - min) + min)
+        }
       }
 
       // 2. Extend Tree A towards Sample
-      const newNodeA = this.extend(treeA, sample)
+      const newNodeA = this.extend(treeA, sample, stepSize)
 
       if (newNodeA) {
         // 3. IF Tree A successfully grew, try to connect Tree B directly to that new node
-        const newNodeB = this.connect(treeB, newNodeA.angles)
+        const newNodeB = this.connect(treeB, newNodeA.angles, stepSize)
 
         if (newNodeB) {
           // SUCCESS! The trees met.
@@ -113,7 +124,11 @@ export class RRTPlanner {
 
   // Tries to extend the tree towards a point.
   // Returns the new Node if valid, null if blocked.
-  private extend(tree: Node[], targetAngles: number[]): Node | null {
+  private extend(
+    tree: Node[],
+    targetAngles: number[],
+    stepSize: number
+  ): Node | null {
     // Find nearest
     let nearest = tree[0]
     let minDist = Infinity
@@ -126,7 +141,7 @@ export class RRTPlanner {
     }
 
     // Steer
-    const newAngles = this.steer(nearest!.angles, targetAngles)
+    const newAngles = this.steer(nearest!.angles, targetAngles, stepSize)
 
     // Check Collision
     if (!this.robot.checkCollision(newAngles, this.obstacle)) {
@@ -139,7 +154,11 @@ export class RRTPlanner {
 
   // Tries to aggressively connect the tree to a target point until it hits a wall
   // Returns the final node reached (if it reached the target), or null
-  private connect(tree: Node[], targetAngles: number[]): Node | null {
+  private connect(
+    tree: Node[],
+    targetAngles: number[],
+    stepSize: number
+  ): Node | null {
     let nearest = tree[0]
     let minDist = Infinity
 
@@ -156,7 +175,7 @@ export class RRTPlanner {
 
     // Keep stepping until we hit the target or a wall
     while (true) {
-      const newAngles = this.steer(currentNode.angles, targetAngles)
+      const newAngles = this.steer(currentNode.angles, targetAngles, stepSize)
 
       // Collision Check
       if (this.robot.checkCollision(newAngles, this.obstacle)) {
@@ -197,10 +216,10 @@ export class RRTPlanner {
     return Math.sqrt(sum)
   }
 
-  private steer(from: number[], to: number[]): number[] {
+  private steer(from: number[], to: number[], stepSize: number): number[] {
     const dist = this.distance(from, to)
-    if (dist < this.stepSize) return to
-    const ratio = this.stepSize / dist
+    if (dist < stepSize) return to
+    const ratio = stepSize / dist
     return from.map((val, i) => val + (to[i]! - val) * ratio)
   }
 }
