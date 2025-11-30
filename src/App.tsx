@@ -6,14 +6,19 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const controllerRef = useRef<SceneController | null>(null)
   const [stats, setStats] = useState<PlannerStats | null>(null)
+  const [targetPos, setTargetPos] = useState<{
+    x: number
+    y: number
+    z: number
+  } | null>(null)
   const [scenario, setScenario] = useState<'easy' | 'medium' | 'hard'>('medium')
   const [debugMode, setDebugMode] = useState(false)
 
   // Obstacle Height (Default 2.0)
   const [obstacleHeight, setObstacleHeight] = useState(2.0)
 
-  // 0: Intro, 1: Greedy IK, 2: RRT-Connect
-  const [step, setStep] = useState<0 | 1 | 2>(0)
+  // 0: Intro, 1: Greedy IK, 2: Standard RRT, 3: RRT-Connect
+  const [step, setStep] = useState<0 | 1 | 2 | 3>(0)
 
   // RRT Parameters
   const [rrtParams, setRrtParams] = useState({
@@ -28,10 +33,12 @@ function App() {
     const controller = new SceneController(canvasRef.current)
     controllerRef.current = controller
     controller.onStatsUpdate = setStats
+    controller.onTargetMove = setTargetPos
 
     // Initial Scenario
     controller.setScenario(scenario)
     controller.setAlgorithm('rrt') // Default background mode
+    controller.setInteraction(false) // Disable interaction for Intro
 
     const onResize = () =>
       controller.resize(window.innerWidth, window.innerHeight)
@@ -44,34 +51,52 @@ function App() {
   const updateAlgorithmForStep = (newStep: number) => {
     if (!controllerRef.current) return
 
+    // Reset stats on step change
+    setStats(null)
+
     if (newStep === 1) {
-      // Switching to Greedy: We can reset or keep.
-      // Usually entering Step 1 implies a fresh start or continue from Intro.
-      // Let's reset robot to home to avoid confusion, but keep scenario.
+      // Switching to Greedy
       controllerRef.current.setAlgorithm('greedy', true)
+      controllerRef.current.setInteraction(true)
+
+      // Trigger Camera Intro Animation on Entry
+      controllerRef.current.animateCameraIntro()
+
+      // Reset Debug Mode
+      setDebugMode(false)
+      controllerRef.current.toggleCollisionDebug(false)
+
+      // HARDCODED FAIL CASE:
+      // Wall is at z=1. Robot at z=0.
+      // Target at (0.5, 1.5, 2.0) -> Behind wall.
+      // Robot tries to go straight -> Collision.
+      controllerRef.current.setTargetPosition(0.39, 1.65, 2.0)
     } else if (newStep === 2) {
-      // Switching to RRT: THIS IS THE KEY CHANGE.
-      // We do NOT reset the robot position if we are coming from Greedy.
-      // Actually, we WANT to reset the robot to home (safe start) but KEEP the target in the hard spot.
-      // `setAlgorithm('rrt', true)` resets robot to home, keeps target.
+      // Switching to Standard RRT (The "Bushy" Tree)
+      controllerRef.current.setAlgorithm('rrt-standard', true)
+      controllerRef.current.setInteraction(true)
+      controllerRef.current.updateRRTParams(rrtParams)
+    } else if (newStep === 3) {
+      // Switching to RRT-Connect (The "Fast" Solution)
       controllerRef.current.setAlgorithm('rrt', true)
-      // Force update params to ensure they are applied
+      controllerRef.current.setInteraction(true)
       controllerRef.current.updateRRTParams(rrtParams)
     } else {
       // Intro
       controllerRef.current.setAlgorithm('rrt')
+      controllerRef.current.setInteraction(false)
     }
   }
 
   // 3. React to Param Changes
   useEffect(() => {
-    if (controllerRef.current && step === 2) {
+    if (controllerRef.current && (step === 2 || step === 3)) {
       controllerRef.current.updateRRTParams(rrtParams)
     }
   }, [rrtParams, step])
 
   // Handlers
-  const handleStepChange = (newStep: 0 | 1 | 2) => {
+  const handleStepChange = (newStep: 0 | 1 | 2 | 3) => {
     setStep(newStep)
     updateAlgorithmForStep(newStep)
   }
@@ -123,7 +148,13 @@ function App() {
               className={step === 2 ? 'active' : ''}
               onClick={() => handleStepChange(2)}
             >
-              2. RRT-Connect
+              2. Std RRT
+            </button>
+            <button
+              className={step === 3 ? 'active' : ''}
+              onClick={() => handleStepChange(3)}
+            >
+              3. Connect
             </button>
           </div>
 
@@ -196,6 +227,15 @@ function App() {
                   Drag the red ball to see the Greedy algorithm fail against the
                   wall.
                 </p>
+                <button
+                  className="secondary-btn"
+                  onClick={() => {
+                    controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
+                  }}
+                  style={{ marginTop: '10px' }}
+                >
+                  Move Target Behind Wall
+                </button>
               </div>
 
               <div className="nav-buttons">
@@ -204,7 +244,7 @@ function App() {
                   className="primary-btn"
                   onClick={() => handleStepChange(2)}
                 >
-                  Next: The Solution &rarr;
+                  Next: Exploration &rarr;
                 </button>
               </div>
             </div>
@@ -212,23 +252,70 @@ function App() {
 
           {step === 2 && (
             <div className="step-content fade-in">
-              <h1>2. RRT-Connect</h1>
-              <p className="subtitle">Rapidly-exploring Random Trees</p>
+              <h1>2. Standard RRT</h1>
+              <p className="subtitle">Single Tree Exploration</p>
 
               <div className="explanation">
-                <h3>Intuition: Probabilistic Planning</h3>
+                <h3>Exploring the Unknown</h3>
+                <p>
+                  Standard RRT grows a single tree from the start configuration.
+                  It randomly samples points in the 5D joint space and extends
+                  the nearest branch towards them.
+                  <br />
+                  <br />
+                  Notice how "bushy" the tree is? It explores everywhere! This
+                  is robust but slow. It might take thousands of nodes just to
+                  find the target because it doesn't know where the goal is
+                  (unless we give it a bias).
+                </p>
+              </div>
+
+              <div className="controls-section">
+                <p className="hint">
+                  Try lowering the Step Size to 0.02 to see a denser tree.
+                </p>
+              </div>
+
+              <div className="nav-buttons">
+                <button onClick={() => handleStepChange(1)}>Back</button>
+                <button
+                  className="run-btn"
+                  onClick={() => controllerRef.current?.runPlanner()}
+                  style={{
+                    backgroundColor: '#2ecc71',
+                    color: 'white',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  ▶ Run Planner
+                </button>
+                <button
+                  className="primary-btn"
+                  onClick={() => handleStepChange(3)}
+                >
+                  Next: Optimization &rarr;
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="step-content fade-in">
+              <h1>3. RRT-Connect</h1>
+              <p className="subtitle">Bi-directional Search</p>
+
+              <div className="explanation">
+                <h3>Meeting in the Middle</h3>
                 <p className="placeholder-text">
                   [PLACEHOLDER: RRT INTUITION]
                   <br />
-                  Instead of greedily moving to the goal, we grow a "Tree" of
-                  possibilities. We randomly sample points in space and try to
-                  connect them.
+                  Instead of wandering blindly, RRT-Connect grows{' '}
+                  <b>two trees</b>: one from the start, one from the goal. They
+                  aggressively try to meet in the middle.
                   <br />
                   <br />
-                  RRT-Connect grows two trees: one from the start, one from the
-                  goal. They aggressively try to meet in the middle. This allows
-                  the robot to explore the empty space and find a path *around*
-                  obstacles, rather than trying to force its way through.
+                  This "Tunneling" effect is much faster. You'll see the tree
+                  looks more like a lightning bolt than a bush.
                 </p>
               </div>
 
@@ -276,7 +363,7 @@ function App() {
               </div>
 
               <div className="nav-buttons">
-                <button onClick={() => handleStepChange(1)}>Back</button>
+                <button onClick={() => handleStepChange(2)}>Back</button>
               </div>
             </div>
           )}
@@ -309,6 +396,23 @@ function App() {
               </button>
             </div>
           </div>
+
+          {targetPos && (
+            <div className="stat-card" style={{ marginBottom: '1rem' }}>
+              <div className="stat-row">
+                <span className="label">Target X</span>
+                <span className="value">{targetPos.x.toFixed(2)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="label">Target Y</span>
+                <span className="value">{targetPos.y.toFixed(2)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="label">Target Z</span>
+                <span className="value">{targetPos.z.toFixed(2)}</span>
+              </div>
+            </div>
+          )}
 
           <div className="control-group">
             <h4>Obstacle Height</h4>
@@ -350,7 +454,7 @@ function App() {
             </div>
           </div>
 
-          {step === 2 && stats && (
+          {step >= 2 && stats && (
             <div className="stat-card fade-in">
               <div className="stat-row">
                 <span className="label">Status</span>
@@ -382,6 +486,18 @@ function App() {
             </label>
           </div>
         </div>
+      </div>
+
+      <div className="controls-help fade-in">
+        <span>
+          <span className="key">LMB</span> Rotate
+        </span>
+        <span>
+          <span className="key">RMB</span> Pan
+        </span>
+        <span>
+          <span className="key">Scroll</span> Zoom
+        </span>
       </div>
     </div>
   )

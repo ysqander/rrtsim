@@ -179,11 +179,49 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     border-color: #33ff33;
 }
 
-.placeholder-text {
-    color: #888;
-    font-style: italic;
-    border-left: 2px solid #333;
-    padding-left: 10px;
-    margin-bottom: 0.5rem;
-    font-size: 0.85rem;
+.secondary-btn {
+    background: transparent;
+    border: 1px solid #e74c3c;
+    color: #e74c3c;
+    font-weight: bold;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+.secondary-btn:hover {
+    background: #e74c3c;
+    color: white;
+    box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
+}
+
+/* Controls Help Overlay */
+.controls-help {
+    position: absolute;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.75rem;
+    color: #aaa;
+    display: flex;
+    gap: 1.5rem;
+    pointer-events: none;
+    user-select: none;
+    z-index: 100;
+}
+.controls-help span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.key {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #fff;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: bold;
 }

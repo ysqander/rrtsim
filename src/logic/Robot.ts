@@ -451,7 +451,7 @@ export class Robot {
 
     // 2. If collision or unreachable, try Random initial angle retries.
     // (We prefer a valid solution even if it takes a few ms more)
-    for (let k = 0; k < 50; k++) {
+    for (let k = 0; k < 100; k++) {
       // Generate random seed
       const randomSeed = limits.map((l) => Math.random() * (l[1] - l[0]) + l[0])
       const attempt = this.calculateIK(targetPos, randomSeed)
@@ -504,12 +504,12 @@ export class Robot {
     const collisionRadius = this.ARM_WIDTH / 2 + this.COLLISION_MARGIN
     const jointRadius = this.JOINT_RADIUS + this.COLLISION_MARGIN
 
-    // We start from 1 because 0 is Base (which is connected to nothing previous)
-    for (let i = 1; i < joints.length; i++) {
-      // Only check segments that have visual length
+    // FIX: Iterate 0 to length-1. Check CONFIG[i] mesh on segment i -> i+1
+    for (let i = 0; i < joints.length - 1; i++) {
+      // Only check segments that have visual length defined in the configuration
       if (this.CONFIG[i]?.visualLength) {
-        const start = joints[i - 1]
-        const end = joints[i]
+        const start = joints[i]
+        const end = joints[i + 1]
 
         if (start && end) {
           for (let k = 0; k <= samplesPerLink; k++) {
@@ -527,8 +527,10 @@ export class Robot {
 
     // 4. CHECK JOINT SPHERES DYNAMICALLY
     // We iterate through CONFIG to find 'revolute' joints that have large hubs
+    // FIX: Also check fixed joints if they have geometry (like Tip)
     this.CONFIG.forEach((cfg, index) => {
-      if (cfg.type === 'revolute') {
+      // Check revolute joints OR the Tip (last one)
+      if (cfg.type === 'revolute' || index === this.CONFIG.length - 1) {
         const jointPos = joints[index]
         if (jointPos) {
           const sphere = new THREE.Sphere(jointPos, jointRadius)

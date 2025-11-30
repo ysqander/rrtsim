@@ -29,17 +29,22 @@ export class SceneController {
   private plannedPath: number[][] = []
   private pathIndex = 0
   private isPlaying = false
+  private isAnimatingTree = false
   private collisionDebugGroup: THREE.Group
 
-  private algorithm: 'greedy' | 'rrt' = 'rrt'
+  private algorithm: 'greedy' | 'rrt' | 'rrt-standard' = 'rrt'
   private rrtParams: RRTParams = {
     stepSize: 0.05,
     maxIter: 20000,
     goalBias: 0.05,
+    algorithm: 'connect',
   }
 
   // Callbacks to update React UI
   public onStatsUpdate: ((stats: PlannerStats) => void) | null = null
+  public onTargetMove:
+    | ((pos: { x: number; y: number; z: number }) => void)
+    | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     // 1. Setup ThreeJS
@@ -52,7 +57,7 @@ export class SceneController {
       0.1,
       1000
     )
-    this.camera.position.set(3, 3, 5)
+    this.camera.position.set(3, 3, 6) // Zoomed out (was 5)
     this.camera.lookAt(0, 1, 0)
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
@@ -67,6 +72,8 @@ export class SceneController {
     // 2. Setup Robot & Environment
     this.robot = new Robot()
     this.scene.add(this.robot.sceneObject)
+    // Ensure initial color is correct (not red)
+    this.robot.setOverrideColor(null)
 
     // Ghost
     this.ghostRobot = new Robot()
@@ -86,6 +93,10 @@ export class SceneController {
     this.targetMesh.position.set(2, 2, 0)
     this.scene.add(this.targetMesh)
 
+    // Add a pulsate animation to the target mesh
+    this.targetMesh.userData.pulsate = true
+    this.targetMesh.userData.time = 0
+
     // Obstacle
     this.obstacle = new THREE.Mesh(
       new THREE.BoxGeometry(1, 2, 0.5),
@@ -103,11 +114,19 @@ export class SceneController {
     this.transformControl.addEventListener('dragging-changed', (event) => {
       this.controls.enabled = !event.value
       // On Drag End -> Plan
-      if (!event.value) this.runPlanner()
+      if (!event.value && this.algorithm === 'greedy') this.runPlanner()
     })
 
     // Live Ghost Update while dragging - ONLY in RRT mode if desired, or Greedy mode live update
     this.transformControl.addEventListener('change', () => {
+      if (this.onTargetMove) {
+        this.onTargetMove({
+          x: this.targetMesh.position.x,
+          y: this.targetMesh.position.y,
+          z: this.targetMesh.position.z,
+        })
+      }
+
       if (this.algorithm === 'greedy') {
         // Real-time update for Greedy
         this.runPlanner()
@@ -128,6 +147,43 @@ export class SceneController {
 
     // Start Loop
     this.animate()
+  }
+
+  public animateCameraIntro() {
+    // Reverse direction: start from left (-), end at right (+)
+    // But user asked to start "from other side of wall" and end "not full 180, but 120"
+    // Let's interpret: Start at +60 deg, end at -60 deg? Or Start at -120, end at -60?
+    // "Start from other side of wall": The wall is at X=0.5, Z=1. The robot is at 0,0,0.
+    // Default camera was (3,3,6).
+    // Let's try a sweep from +60 degrees to -60 degrees (Total 120 deg arc)
+
+    const radius = 6
+    const height = 3
+    // 60 degrees in radians = PI/3
+    const startAngle = Math.PI / 3
+    const endAngle = -Math.PI / 3
+
+    const duration = 3000 // 3 seconds
+    const start = performance.now()
+
+    const pan = () => {
+      const now = performance.now()
+      const t = Math.min((now - start) / duration, 1)
+      // Ease out cubic
+      const ease = 1 - Math.pow(1 - t, 3)
+
+      const angle = startAngle + (endAngle - startAngle) * ease
+      const x = Math.sin(angle) * radius
+      const z = Math.cos(angle) * radius
+
+      this.camera.position.set(x, height, z)
+      this.camera.lookAt(0, 1, 0)
+
+      if (t < 1) {
+        requestAnimationFrame(pan)
+      }
+    }
+    pan()
   }
 
   // --- NEW: DYNAMIC JOINTS ---
@@ -161,6 +217,28 @@ export class SceneController {
     this.ghostRobot.resetConfig()
     this.makeGhost(this.ghostRobot.sceneObject)
     this.runPlanner()
+  }
+
+  // --- NEW: INTERACTION CONTROL ---
+  public setInteraction(enabled: boolean) {
+    this.controls.enabled = enabled
+    this.transformControl.enabled = enabled
+
+    if (enabled) {
+      this.transformControl.attach(this.targetMesh)
+    } else {
+      this.transformControl.detach()
+    }
+  }
+
+  public setTargetPosition(x: number, y: number, z: number) {
+    this.targetMesh.position.set(x, y, z)
+    if (this.onTargetMove) {
+      this.onTargetMove({ x, y, z })
+    }
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
   }
 
   // --- NEW: SCENARIO MANAGER ---
@@ -214,10 +292,16 @@ export class SceneController {
     this.runPlanner()
   }
 
-  public setAlgorithm(mode: 'greedy' | 'rrt', reset: boolean = false) {
+  public setAlgorithm(
+    mode: 'greedy' | 'rrt' | 'rrt-standard',
+    reset: boolean = false
+  ) {
     this.algorithm = mode
     // Hide ghost in both modes as per new plan
     this.ghostRobot.sceneObject.visible = false
+
+    // RESET COLOR: Clear any leftover collision color from Greedy step
+    this.robot.setOverrideColor(null)
 
     // Clear trees when switching
     if (this.treeMesh) {
@@ -228,14 +312,20 @@ export class SceneController {
 
     if (reset) {
       this.robot.setAngles([0, 0, 0, 0, 0]) // Reset to home
+      this.robot.setOverrideColor(null) // Reset color
       // Note: We do NOT reset the target position, so it stays in the "stuck" spot
     }
 
-    // If switching to RRT, we want to plan immediately from the current (or reset) state to the target
-    if (mode === 'rrt') {
+    // GREEDY runs immediately. RRT waits for button press.
+    if (mode === 'greedy') {
       // IMPORTANT: Force a re-render of the scene state before planning to ensure matrices are updated
       this.scene.updateMatrixWorld(true)
       this.runPlanner()
+    } else {
+      // RRT modes: Just reset stats, don't run yet
+      if (this.onStatsUpdate) {
+        this.onStatsUpdate({ time: 0, nodes: 0, success: false })
+      }
     }
   }
 
@@ -268,25 +358,31 @@ export class SceneController {
 
     // The robot's physical thickness (matches Robot.ts)
     const ARM_THICKNESS = 0.3
+    // Robot.ts uses JOINT_RADIUS(0.4) + MARGIN(0.05)
+    // Visualizing the full checked volume including margin
+    const COLLISION_RADIUS = ARM_THICKNESS / 2 + 0.3
+    const JOINT_RADIUS = 0.4 + 0.05
 
-    // Define the links we check collision for:
-    // Iterate through all moving joints starting from Shoulder (index 2)
-    // to the Tip.
-    const segments = []
-    for (let i = 2; i < joints.length - 1; i++) {
-      segments.push({ start: joints[i], end: joints[i + 1] })
-    }
+    // 1. DRAW CYLINDERS (Segments)
+    // Matches the loop in Robot.ts: 0 to length-1
+    for (let i = 0; i < joints.length - 1; i++) {
+      // Only draw if there is a "visualLength" equivalent check
+      // We assume basic robot structure has length for all main links
+      if (!joints[i] || !joints[i + 1]) continue
 
-    segments.forEach((seg) => {
-      // Create a Cylinder to represent the arm volume
-      const distance = seg.start.distanceTo(seg.end)
+      const start = joints[i]
+      const end = joints[i + 1]
+
+      const distance = start.distanceTo(end)
+      if (distance < 0.01) continue // Skip zero-length offsets
+
       const geometry = new THREE.CylinderGeometry(
-        ARM_THICKNESS / 2,
-        ARM_THICKNESS / 2,
+        COLLISION_RADIUS,
+        COLLISION_RADIUS,
         distance,
         8
       )
-      geometry.rotateX(Math.PI / 2) // Align with Z initially for LookAt logic
+      geometry.rotateX(Math.PI / 2)
 
       const material = new THREE.MeshBasicMaterial({
         color: 0xff00ff,
@@ -296,15 +392,33 @@ export class SceneController {
       })
 
       const mesh = new THREE.Mesh(geometry, material)
-
-      // Math to position cylinder between two points
       const midPoint = new THREE.Vector3()
-        .addVectors(seg.start, seg.end)
+        .addVectors(start, end)
         .multiplyScalar(0.5)
       mesh.position.copy(midPoint)
-      mesh.lookAt(seg.end)
+      mesh.lookAt(end)
 
       this.collisionDebugGroup.add(mesh)
+    }
+
+    // 2. DRAW SPHERES (Joints)
+    // Matches step 4 in Robot.ts
+    joints.forEach((pos, i) => {
+      // Heuristic: if it's not the first one (Base is cylinder usually)
+      // Robot.ts checks revolute + tip. Base is fixed but usually covered by cylinder.
+      // Let's draw for all index > 0 just to be safe and see everything
+      if (i > 0) {
+        const geo = new THREE.SphereGeometry(JOINT_RADIUS, 8, 8)
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0x00ffff, // Cyan for joints
+          wireframe: true,
+          transparent: true,
+          opacity: 0.3,
+        })
+        const mesh = new THREE.Mesh(geo, mat)
+        mesh.position.copy(pos)
+        this.collisionDebugGroup.add(mesh)
+      }
     })
 
     // Draw the Obstacle Box (Yellow Wireframe)
@@ -360,12 +474,46 @@ export class SceneController {
     // Ensure robot color is reset
     this.robot.setOverrideColor(null)
 
+    // Ensure startAngles are collision-free (sanity check)
+    // But if we are in 'Greedy' mode before, we might be crashed against the wall.
+    // Standard RRT will fail if start is invalid.
+    // Ideally we should have reset the robot to Home before running this step.
+    // The 'setAlgorithm' handles reset, but let's be safe.
+
+    // Update params with current mode
+    const effectiveParams: RRTParams = {
+      ...this.rrtParams,
+      algorithm: this.algorithm === 'rrt-standard' ? 'standard' : 'connect',
+    }
+
+    // LOGGING
+    console.log('[SceneController] Starting Plan:', {
+      algorithm: this.algorithm,
+      startAngles,
+      targetPos: this.targetMesh.position,
+      params: effectiveParams,
+    })
+
     const path = this.planner.plan(
       startAngles,
       this.targetMesh.position,
-      this.rrtParams
+      effectiveParams
     )
     const end = performance.now()
+    console.log(
+      `[SceneController] Planning finished in ${
+        end - start
+      }ms. Success: ${!!path}`
+    )
+
+    if (!path) {
+      // VISUAL FEEDBACK FOR FAILURE
+      // Flash the robot red quickly
+      this.robot.setOverrideColor(0xff0000)
+      setTimeout(() => {
+        this.robot.setOverrideColor(null)
+      }, 500)
+    }
 
     // 1. Visualize Tree
     this.visualizeSearchTree()
@@ -379,11 +527,11 @@ export class SceneController {
       })
     }
 
-    // 3. Execute Path
+    // 3. Execute Path (DELAY UNTIL ANIMATION DONE)
     if (path) {
       this.plannedPath = path
       this.pathIndex = 0
-      this.isPlaying = true
+      // this.isPlaying = true // Wait for animation to finish before playing
     }
   }
 
@@ -423,20 +571,32 @@ export class SceneController {
       const node = tree[i]
       // Skip roots or malformed nodes
       if (!node || !node.parent) continue
+
       // Calculate 3D position of the Tip for start and end of the branch
-      points.push(this.robot.getTipPosition(node.parent.angles))
-      points.push(this.robot.getTipPosition(node.angles))
+      const startPos = this.robot.getTipPosition(node.parent.angles)
+      const endPos = this.robot.getTipPosition(node.angles)
+
+      // Check for NaNs just in case
+      if (isNaN(startPos.x) || isNaN(endPos.x)) continue
+
+      points.push(startPos)
+      points.push(endPos)
     }
+
+    console.log(
+      `[SceneController] Visualizing Tree: ${tree.length} nodes, ${points.length} vertices`
+    )
 
     const lineGeo = new THREE.BufferGeometry().setFromPoints(points)
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0x00ff00, // Matrix Green
+      color: 0x55ff55, // Brighter Green
       transparent: true,
-      opacity: 0.15, // Low opacity makes dense areas "glow" brighter
-      depthWrite: false, // Better transparency sorting
+      opacity: 0.6, // Much more visible (was 0.15)
+      depthWrite: false,
     })
 
     this.treeMesh = new THREE.LineSegments(lineGeo, lineMat)
+    this.treeMesh.geometry.setDrawRange(0, 0) // Start hidden for animation
 
     // 3. GENERATE POINTS (The Nodes)
     // This adds a "Point Cloud" effect which makes the search volume look solid
@@ -460,15 +620,62 @@ export class SceneController {
       })
 
       const dots = new THREE.Points(dotGeo, dotMat)
+      dots.geometry.setDrawRange(0, 0) // Start hidden
       this.treeMesh.add(dots) // Attach to the line mesh so they move/delete together
     }
 
     this.scene.add(this.treeMesh)
+    this.isAnimatingTree = true
   }
 
   private animate = () => {
     requestAnimationFrame(this.animate)
     this.controls.update()
+
+    // Target Pulsation Logic (Visual Cue)
+    if (this.targetMesh && this.targetMesh.userData.pulsate) {
+      this.targetMesh.userData.time += 0.05
+      const scale = 1 + Math.sin(this.targetMesh.userData.time) * 0.2
+      this.targetMesh.scale.set(scale, scale, scale)
+    }
+
+    // Tree Animation Logic
+    if (this.isAnimatingTree && this.treeMesh) {
+      const linesSpeed = 200 // Vertices per frame
+      const currentLineCount = this.treeMesh.geometry.drawRange.count
+      const totalLineCount = this.treeMesh.geometry.attributes.position.count
+
+      if (currentLineCount < totalLineCount) {
+        this.treeMesh.geometry.setDrawRange(0, currentLineCount + linesSpeed)
+      }
+
+      // Animate Dots if they exist
+      const dots = this.treeMesh.children.find(
+        (c) => c instanceof THREE.Points
+      ) as THREE.Points | undefined
+
+      if (dots) {
+        const dotsSpeed = 100 // Vertices per frame
+        const currentDotCount = dots.geometry.drawRange.count
+        const totalDotCount = dots.geometry.attributes.position.count
+        if (currentDotCount < totalDotCount) {
+          dots.geometry.setDrawRange(0, currentDotCount + dotsSpeed)
+        }
+      }
+
+      // Completion Check
+      if (currentLineCount >= totalLineCount) {
+        this.isAnimatingTree = false
+        // Ensure fully visible
+        this.treeMesh.geometry.setDrawRange(0, Infinity)
+        if (dots) dots.geometry.setDrawRange(0, Infinity)
+
+        // START ROBOT MOVEMENT HERE
+        if (this.plannedPath.length > 0) {
+          this.isPlaying = true
+        }
+      }
+    }
 
     if (this.isPlaying && this.plannedPath.length > 0) {
       // Speed control: Move 2 steps per frame for smoothness
