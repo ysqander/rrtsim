@@ -23,6 +23,7 @@ export class SceneController {
   public targetMesh: THREE.Mesh
   public obstacle: THREE.Mesh
   private treeMesh: THREE.LineSegments | null = null
+  private ghostTreeMesh: THREE.LineSegments | null = null
   private transformControl: TransformControls
 
   // State
@@ -34,9 +35,9 @@ export class SceneController {
 
   private algorithm: 'greedy' | 'rrt' | 'rrt-standard' = 'rrt'
   private rrtParams: RRTParams = {
-    stepSize: 0.05,
+    stepSize: 0.2,
     maxIter: 20000,
-    goalBias: 0.05,
+    goalBias: 0.1,
     algorithm: 'connect',
   }
 
@@ -296,8 +297,17 @@ export class SceneController {
     mode: 'greedy' | 'rrt' | 'rrt-standard',
     reset: boolean = false
   ) {
+    // NEW: Snapshot if transitioning FROM Standard RRT TO Connect
+    if (this.algorithm === 'rrt-standard' && mode === 'rrt') {
+      this.snapshotStandardTree()
+    } else if (mode !== 'rrt') {
+      // If going BACK to standard or Greedy, clear the ghost
+      this.clearGhostTree()
+    }
+
     this.algorithm = mode
-    // Hide ghost in both modes as per new plan
+    // Hide ghost in both modes as per new plan (Wait, plan said hide ghost robot, not ghost tree)
+    // Ghost Robot (the green one) is different from Ghost Tree.
     this.ghostRobot.sceneObject.visible = false
 
     // RESET COLOR: Clear any leftover collision color from Greedy step
@@ -314,6 +324,22 @@ export class SceneController {
       this.robot.setAngles([0, 0, 0, 0, 0]) // Reset to home
       this.robot.setOverrideColor(null) // Reset color
       // Note: We do NOT reset the target position, so it stays in the "stuck" spot
+    }
+
+    // APPLY PRESETS
+    if (mode === 'rrt-standard' || mode === 'rrt') {
+      // Weak defaults to force failure/struggle initially
+      const weakParams: RRTParams = {
+        stepSize: 0.05, // Tiny steps = slow exploration
+        maxIter: 5000, // Low iterations = likely timeout
+        goalBias: 0.05, // Low bias = less guidance
+        algorithm: mode === 'rrt-standard' ? 'standard' : 'connect',
+      }
+      this.rrtParams = weakParams
+      // Update UI state if possible? (This is one-way, React won't see this unless we sync back.
+      // For now, we just set internal state. Ideally App.tsx calls updateRRTParams on load)
+      // But wait, App.tsx controls the state. We should probably let App.tsx handle the presets.
+      // IGNORE THIS BLOCK - Logic moved to App.tsx for state sync.
     }
 
     // GREEDY runs immediately. RRT waits for button press.
@@ -360,7 +386,7 @@ export class SceneController {
     const ARM_THICKNESS = 0.3
     // Robot.ts uses JOINT_RADIUS(0.4) + MARGIN(0.05)
     // Visualizing the full checked volume including margin
-    const COLLISION_RADIUS = ARM_THICKNESS / 2 + 0.3
+    const COLLISION_RADIUS = ARM_THICKNESS / 2 + 2
     const JOINT_RADIUS = 0.4 + 0.05
 
     // 1. DRAW CYLINDERS (Segments)
@@ -711,5 +737,41 @@ export class SceneController {
         })
       }
     })
+  }
+
+  // NEW: Snapshot Standard Tree
+  private snapshotStandardTree() {
+    if (!this.treeMesh) return
+
+    // Clone the geometry to freeze it
+    const geometry = this.treeMesh.geometry.clone()
+
+    // Create a Red/Orange material for the "Ghost" (bad path)
+    const material = new THREE.LineBasicMaterial({
+      color: 0xff5555, // Red/Orange
+      transparent: true,
+      opacity: 0.2, // Faint
+      depthWrite: false,
+    })
+
+    this.ghostTreeMesh = new THREE.LineSegments(geometry, material)
+
+    // Ensure it's fully visible (override animation draw range)
+    this.ghostTreeMesh.geometry.setDrawRange(0, Infinity)
+
+    this.scene.add(this.ghostTreeMesh)
+  }
+
+  private clearGhostTree() {
+    if (this.ghostTreeMesh) {
+      this.scene.remove(this.ghostTreeMesh)
+      this.ghostTreeMesh.geometry.dispose()
+      if (Array.isArray(this.ghostTreeMesh.material)) {
+        this.ghostTreeMesh.material.forEach((m) => m.dispose())
+      } else {
+        this.ghostTreeMesh.material.dispose()
+      }
+      this.ghostTreeMesh = null
+    }
   }
 }

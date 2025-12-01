@@ -64,7 +64,79 @@ export class RRTPlanner {
     }
 
     // --- STEP 2: RRT-CONNECT (Default) ---
+
+    // CRITICAL: RRT-Connect REQUIRES a valid goal configuration.
+    // If the exact IK solution is in collision, try to find a valid configuration nearby.
+    if (this.robot.checkCollision(goalAngles, this.obstacle)) {
+      console.warn(
+        'Goal in collision. Searching for valid neighbor for RRT-Connect...'
+      )
+      const validNeighbor = this.findValidNeighbor(goalAngles)
+      if (validNeighbor) {
+        console.log('Found valid neighbor goal.')
+        goalAngles = validNeighbor
+      } else {
+        console.warn(
+          'Could not find valid neighbor. RRT-Connect might fail or be invalid.'
+        )
+        // We still attempt Connect (it might fail to add the root), or we could return null.
+        // Ideally, we should probably return null here if we are strict, but let's try Standard as last resort?
+        // User asked NOT to default to standard, but if we literally can't start the goal tree, we can't do Connect.
+        // Let's return null to signal "Target Unreachable" rather than bad behavior.
+        return null
+      }
+    }
+
     return this.planConnect(startAngles, goalAngles, params)
+  }
+
+  /**
+   * Tries to find a collision-free configuration near a given point.
+   * Useful when the IK solution is slightly inside a wall.
+   */
+  private findValidNeighbor(
+    angles: number[],
+    attempts = 100,
+    range = 0.5
+  ): number[] | null {
+    for (let i = 0; i < attempts; i++) {
+      const candidate = angles.map(
+        (a) => a + (Math.random() * range * 2 - range)
+      )
+      if (!this.robot.checkCollision(candidate, this.obstacle)) {
+        return candidate
+      }
+    }
+    return null
+  }
+
+  /**
+   * Checks if the path segment between 'from' and 'to' is collision-free
+   * by interpolating and checking intermediate configurations.
+   *
+   * This prevents "tunneling" where the robot might jump over an obstacle
+   * if the step size is too large.
+   */
+  private isSegmentValid(from: number[], to: number[]): boolean {
+    const dist = this.distance(from, to)
+    const RESOLUTION = 0.05 // Check every 0.05 radians (approx 3 degrees)
+
+    // If distance is very small, just check the endpoint (optimization)
+    if (dist < RESOLUTION) {
+      return !this.robot.checkCollision(to, this.obstacle)
+    }
+
+    const steps = Math.ceil(dist / RESOLUTION)
+
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      // Linear interpolation between joint angles
+      const intermediate = from.map((val, idx) => val + (to[idx]! - val) * t)
+      if (this.robot.checkCollision(intermediate, this.obstacle)) {
+        return false // Hit obstacle during transition
+      }
+    }
+    return true
   }
 
   private planStandard(
@@ -83,7 +155,9 @@ export class RRTPlanner {
     for (let i = 0; i < maxIter; i++) {
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('Standard RRT Timeout')
-        break
+        this.lastTrees = tree // Visualize partial tree
+        // Return null to indicate failure, but tree is preserved in this.lastTrees
+        return null
       }
 
       // 1. Sample
@@ -140,7 +214,8 @@ export class RRTPlanner {
       // Because this is an algorithm with potentially a very large number of iterations, we need to limit the time it can run for.
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('RRT-Connect Timeout')
-        break
+        this.lastTrees = [...startTree, ...goalTree] // Visualize partial trees
+        return null
       }
 
       // 1. Random Sample (Respecting joint angle limits) with Goal Bias
@@ -226,8 +301,8 @@ export class RRTPlanner {
     // Steer
     const newAngles = this.steer(nearest!.angles, targetAngles, stepSize)
 
-    // Check Collision
-    if (!this.robot.checkCollision(newAngles, this.obstacle)) {
+    // Check Collision (Segment Check)
+    if (this.isSegmentValid(nearest!.angles, newAngles)) {
       const newNode: Node = { angles: newAngles, parent: nearest! }
       tree.push(newNode)
       return newNode
@@ -260,8 +335,8 @@ export class RRTPlanner {
     while (true) {
       const newAngles = this.steer(currentNode.angles, targetAngles, stepSize)
 
-      // Collision Check
-      if (this.robot.checkCollision(newAngles, this.obstacle)) {
+      // Collision Check (Segment Check)
+      if (!this.isSegmentValid(currentNode.angles, newAngles)) {
         return null // Hit wall
       }
 

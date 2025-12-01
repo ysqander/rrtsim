@@ -24,7 +24,7 @@ export class Robot {
   // Constants for visual and collision
   public readonly JOINT_RADIUS = 0.4
   public readonly ARM_WIDTH = 0.3
-  private readonly COLLISION_MARGIN = 0.05
+  // private readonly COLLISION_MARGIN = 0.05 // Deprecated in favor of local effectiveMargin
 
   // JOINT parameters
   private CONFIG: LinkConfig[] = [
@@ -501,8 +501,11 @@ export class Robot {
     // 3. Check Sampling Points along the bones
     // We iterate through the CONFIG to find segments (where visualLength > 0)
     const samplesPerLink = 10
-    const collisionRadius = this.ARM_WIDTH / 2 + this.COLLISION_MARGIN
-    const jointRadius = this.JOINT_RADIUS + this.COLLISION_MARGIN
+    // INCREASED MARGIN: To better match the visual debugging and avoid clipping
+    // Was 0.05, increasing to 0.15 to provide a safer buffer around the robot
+    const effectiveMargin = 0.15
+    const collisionRadius = this.ARM_WIDTH / 2 + effectiveMargin
+    const jointRadius = this.JOINT_RADIUS + effectiveMargin
 
     // FIX: Iterate 0 to length-1. Check CONFIG[i] mesh on segment i -> i+1
     for (let i = 0; i < joints.length - 1; i++) {

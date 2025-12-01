@@ -6,6 +6,8 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const controllerRef = useRef<SceneController | null>(null)
   const [stats, setStats] = useState<PlannerStats | null>(null)
+  // Track Standard RRT stats specifically for comparison
+  const [standardStats, setStandardStats] = useState<PlannerStats | null>(null)
   const [targetPos, setTargetPos] = useState<{
     x: number
     y: number
@@ -22,9 +24,9 @@ function App() {
 
   // RRT Parameters
   const [rrtParams, setRrtParams] = useState({
-    stepSize: 0.05,
+    stepSize: 0.2,
     maxIter: 5000,
-    goalBias: 0.05,
+    goalBias: 0.1,
   })
 
   // 1. Initialize Scene
@@ -32,7 +34,15 @@ function App() {
     if (!canvasRef.current) return
     const controller = new SceneController(canvasRef.current)
     controllerRef.current = controller
-    controller.onStatsUpdate = setStats
+    controller.onStatsUpdate = (newStats) => {
+      setStats(newStats)
+      // Capture Standard RRT stats for comparison later (only if we are currently in Step 2)
+      // Note: We need to check the current step Ref or just trust the logic.
+      // Since this closure captures the initial state, we can't read 'step' directly here correctly if we don't add it to deps.
+      // BUT: onStatsUpdate is assigned once.
+      // Better approach: Pass the step to the stats object or update logic.
+      // ACTUALLY: Let's update the callback in useEffect whenever step changes.
+    }
     controller.onTargetMove = setTargetPos
 
     // Initial Scenario
@@ -45,7 +55,16 @@ function App() {
     window.addEventListener('resize', onResize)
 
     return () => window.removeEventListener('resize', onResize)
-  }, []) // One-time init, ignore scenario dependency as it's handled by state setter
+  }, []) // One-time init
+
+  // Update the stats callback whenever step changes to capture context
+  useEffect(() => {
+    if (controllerRef.current) {
+      controllerRef.current.onStatsUpdate = (newStats) => {
+        setStats(newStats)
+      }
+    }
+  }, [step])
 
   // 2. React to Step Changes
   const updateAlgorithmForStep = (newStep: number) => {
@@ -53,6 +72,11 @@ function App() {
 
     // Reset stats on step change
     setStats(null)
+
+    // Clear Standard Stats if going BACK before step 2
+    if (newStep < 2) {
+      setStandardStats(null)
+    }
 
     if (newStep === 1) {
       // Switching to Greedy
@@ -75,12 +99,20 @@ function App() {
       // Switching to Standard RRT (The "Bushy" Tree)
       controllerRef.current.setAlgorithm('rrt-standard', true)
       controllerRef.current.setInteraction(true)
-      controllerRef.current.updateRRTParams(rrtParams)
+
+      // Apply WEAK defaults for "Failure" demo
+      const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+      setRrtParams(weakParams)
+      controllerRef.current.updateRRTParams(weakParams)
     } else if (newStep === 3) {
       // Switching to RRT-Connect (The "Fast" Solution)
       controllerRef.current.setAlgorithm('rrt', true)
       controllerRef.current.setInteraction(true)
-      controllerRef.current.updateRRTParams(rrtParams)
+
+      // Apply WEAK defaults again to show improvement
+      const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+      setRrtParams(weakParams)
+      controllerRef.current.updateRRTParams(weakParams)
     } else {
       // Intro
       controllerRef.current.setAlgorithm('rrt')
@@ -97,6 +129,12 @@ function App() {
 
   // Handlers
   const handleStepChange = (newStep: 0 | 1 | 2 | 3) => {
+    // Capture Standard RRT stats when leaving Step 2 (Standard RRT)
+    // This ensures we compare against the EXACT run the user just saw.
+    if (step === 2 && stats) {
+      setStandardStats(stats)
+    }
+
     setStep(newStep)
     updateAlgorithmForStep(newStep)
   }
@@ -258,22 +296,79 @@ function App() {
               <div className="explanation">
                 <h3>Exploring the Unknown</h3>
                 <p>
-                  Standard RRT grows a single tree from the start configuration.
-                  It randomly samples points in the 5D joint space and extends
-                  the nearest branch towards them.
+                  Standard RRT grows a single tree from the start. It explores
+                  blindly.
                   <br />
                   <br />
-                  Notice how "bushy" the tree is? It explores everywhere! This
-                  is robust but slow. It might take thousands of nodes just to
-                  find the target because it doesn't know where the goal is
-                  (unless we give it a bias).
+                  <b>Try it:</b> Click "Run Planner".
+                  <br />
+                  Notice how "bushy" the tree is? It explores everywhere! But
+                  for this "Behind the Wall" target, it will likely{' '}
+                  <b>FAIL (botos will not snap to the target position)</b> or
+                  time out. This is because it doesn't know where to go.
+                  <br />
+                  <br />
+                  <b>Parameter Guide:</b>
+                  <br />- <b>Step Size:</b> How far the robot reaches in each
+                  step. Larger steps jump gaps but might hit walls.
+                  <br />- <b>Iterations:</b> How many attempts to make. More
+                  attempts = higher chance of success but slower.
+                  <br />- <b>Goal Bias:</b> How often it tries to go straight to
+                  the goal. Higher bias = faster but might get stuck.
+                  <br />
+                  <br />
+                  <b>Still Failing?</b> If after setting all parameters to the
+                  most favorable positions, it still doesn't find the target,
+                  this means the configuration is very difficult given the angle
+                  constraints.
+                  <br />
+                  Try adding a <b>Joint</b> (on the right hand side).
                 </p>
               </div>
 
               <div className="controls-section">
                 <p className="hint">
-                  Try lowering the Step Size to 0.02 to see a denser tree.
+                  Parameters are set to "Weak" defaults. Tune them!
                 </p>
+                <div className="parameter-control">
+                  <label>Step Size (Growth Rate): {rrtParams.stepSize}</label>
+                  <input
+                    type="range"
+                    min="0.01"
+                    max="0.5"
+                    step="0.01"
+                    value={rrtParams.stepSize}
+                    onChange={(e) =>
+                      handleParamChange('stepSize', parseFloat(e.target.value))
+                    }
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label>Max Iterations (Effort): {rrtParams.maxIter}</label>
+                  <input
+                    type="range"
+                    min="1000"
+                    max="10000"
+                    step="1000"
+                    value={rrtParams.maxIter}
+                    onChange={(e) =>
+                      handleParamChange('maxIter', parseInt(e.target.value))
+                    }
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label>Goal Bias: {rrtParams.goalBias}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={rrtParams.goalBias}
+                    onChange={(e) =>
+                      handleParamChange('goalBias', parseFloat(e.target.value))
+                    }
+                  />
+                </div>
               </div>
 
               <div className="nav-buttons">
@@ -306,17 +401,96 @@ function App() {
 
               <div className="explanation">
                 <h3>Meeting in the Middle</h3>
-                <p className="placeholder-text">
-                  [PLACEHOLDER: RRT INTUITION]
+                <p>
+                  Standard RRT struggled with the wall. Now let's try
+                  <b>RRT-Connect</b>.
                   <br />
-                  Instead of wandering blindly, RRT-Connect grows{' '}
-                  <b>two trees</b>: one from the start, one from the goal. They
+                  <br />
+                  It grows <b>two trees</b>: one from start, one from goal. They
                   aggressively try to meet in the middle.
                   <br />
                   <br />
-                  This "Tunneling" effect is much faster. You'll see the tree
-                  looks more like a lightning bolt than a bush.
+                  <b>Action:</b> Even with the same "Weak" parameters, click
+                  "Run". Does it solve it? Or does it get closer?
+                  <br />
+                  It's much more efficient, often finding a path where Standard
+                  RRT fails completely.
                 </p>
+
+                {/* NEW: Comparison Dashboard */}
+                {standardStats && (
+                  <div
+                    className="comparison-card"
+                    style={{
+                      marginTop: '1rem',
+                      padding: '1rem',
+                      background: 'rgba(0,0,0,0.2)',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <h4>Performance Comparison</h4>
+
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '1rem',
+                        marginBottom: '0.5rem',
+                      }}
+                    >
+                      <div style={{ color: '#ff7777' }}>
+                        <strong>Standard RRT</strong>
+                        <br />
+                        Time: {standardStats.time}ms
+                        <br />
+                        Nodes: {standardStats.nodes}
+                      </div>
+
+                      <div style={{ color: '#55ff55' }}>
+                        <strong>RRT-Connect</strong>
+                        <br />
+                        {stats ? (
+                          <>
+                            Time: {stats.time}ms
+                            <br />
+                            Nodes: {stats.nodes}
+                          </>
+                        ) : (
+                          <span>Running...</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {stats && stats.success && standardStats.success && (
+                      <div
+                        style={{
+                          borderTop: '1px solid rgba(255,255,255,0.1)',
+                          paddingTop: '0.5rem',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <strong>
+                          Speedup:{' '}
+                          {(
+                            standardStats.time / Math.max(1, stats.time)
+                          ).toFixed(1)}
+                          x Faster
+                        </strong>
+                      </div>
+                    )}
+
+                    <p
+                      style={{
+                        fontSize: '0.8rem',
+                        color: '#aaa',
+                        marginTop: '0.5rem',
+                      }}
+                    >
+                      The faint red ghost tree shows the volume Standard RRT had
+                      to explore.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="controls-section">
@@ -326,7 +500,7 @@ function App() {
                   <input
                     type="range"
                     min="0.01"
-                    max="0.2"
+                    max="0.5"
                     step="0.01"
                     value={rrtParams.stepSize}
                     onChange={(e) =>
@@ -364,6 +538,17 @@ function App() {
 
               <div className="nav-buttons">
                 <button onClick={() => handleStepChange(2)}>Back</button>
+                <button
+                  className="run-btn"
+                  onClick={() => controllerRef.current?.runPlanner()}
+                  style={{
+                    backgroundColor: '#2ecc71',
+                    color: 'white',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  ▶ Run Planner
+                </button>
               </div>
             </div>
           )}
@@ -442,7 +627,18 @@ function App() {
           <div className="control-group">
             <h4>Robot</h4>
             <div className="button-group">
-              <button onClick={() => controllerRef.current?.addJoint()}>
+              <button
+                onClick={() => controllerRef.current?.addJoint()}
+                style={
+                  step === 2 && (!stats || !stats.success)
+                    ? {
+                        border: '1px solid #f1c40f',
+                        color: '#f1c40f',
+                        boxShadow: '0 0 5px rgba(241, 196, 15, 0.3)',
+                      }
+                    : {}
+                }
+              >
                 + Joint
               </button>
               <button onClick={() => controllerRef.current?.removeJoint()}>
