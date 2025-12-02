@@ -12,6 +12,9 @@ export type PlannerStats = {
   failureReason?: FailureReason // Why planning failed (if it did)
   failureDetails?: string // Human-readable failure explanation
   isGreedy?: boolean // To differentiate Greedy vs RRT failures
+  startNodes?: number // Number of nodes in the start tree (RRT-Connect)
+  goalNodes?: number // Number of nodes in the goal tree (RRT-Connect)
+  meetIteration?: number // Iteration at which the trees met (RRT-Connect)
 }
 
 // Serialized tree node for visualization (from worker)
@@ -32,9 +35,16 @@ export class SceneController {
   // Objects
   public targetMesh: THREE.Mesh
   public obstacle: THREE.Mesh
+  private extraObstacles: THREE.Mesh[] = []
   private treeMesh: THREE.LineSegments | null = null
   private ghostTreeMesh: THREE.LineSegments | null = null
   private transformControl: TransformControls
+
+  // Obstacle Group System (for movable presets)
+  private obstacleGroup: THREE.Group
+  private obstacleTransformControl: TransformControls
+  private currentObstaclePreset: 'wall' | 'inverted_u' | 'corridor' = 'wall'
+  private editingTarget: boolean = true // true = editing target, false = editing obstacles
 
   // State
   private plannedPath: number[][] = []
@@ -60,6 +70,7 @@ export class SceneController {
   public onTargetMove:
     | ((pos: { x: number; y: number; z: number }) => void)
     | null = null
+  public onObstacleMove: ((pos: { x: number; z: number }) => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     // 1. Setup ThreeJS
@@ -181,6 +192,36 @@ export class SceneController {
 
     this.transformControl.attach(this.targetMesh)
     this.scene.add(this.transformControl.getHelper())
+
+    // Setup Obstacle Group and its TransformControls
+    this.obstacleGroup = new THREE.Group()
+    this.scene.add(this.obstacleGroup)
+
+    this.obstacleTransformControl = new TransformControls(this.camera, canvas)
+    // Lock to XZ plane only (no Y movement - obstacles stay on the ground)
+    this.obstacleTransformControl.showY = false
+    this.obstacleTransformControl.addEventListener(
+      'dragging-changed',
+      (event) => {
+        this.controls.enabled = !event.value
+      }
+    )
+    this.obstacleTransformControl.addEventListener('change', () => {
+      // Ensure Y stays at 0 (ground level)
+      if (this.obstacleGroup.position.y !== 0) {
+        this.obstacleGroup.position.y = 0
+      }
+      if (this.onObstacleMove) {
+        this.onObstacleMove({
+          x: this.obstacleGroup.position.x,
+          z: this.obstacleGroup.position.z,
+        })
+      }
+    })
+    this.scene.add(this.obstacleTransformControl.getHelper())
+    // Start with obstacle controls hidden (target is being edited by default)
+    this.obstacleTransformControl.enabled = false
+    this.obstacleTransformControl.getHelper().visible = false
 
     // Setup Collision Debug Group
     this.collisionDebugGroup = new THREE.Group()
@@ -350,6 +391,9 @@ export class SceneController {
       this.treeMesh = null
     }
 
+    // Clear any extra obstacles from connect showcase
+    this.clearExtraObstacles()
+
     if (type === 'easy') {
       // No obstacles, easy target
       this.obstacle.position.set(0, -10, 0) // Hide wall underground
@@ -476,18 +520,6 @@ export class SceneController {
 
   // --- WORKER HELPERS ---
 
-  // Serialize obstacle bounding box for worker
-  private getObstacleBox(): {
-    min: [number, number, number]
-    max: [number, number, number]
-  } {
-    const box = new THREE.Box3().setFromObject(this.obstacle)
-    return {
-      min: [box.min.x, box.min.y, box.min.z],
-      max: [box.max.x, box.max.y, box.max.z],
-    }
-  }
-
   // Handle results from the RRT worker
   private handleWorkerResult(result: WorkerOutput) {
     this.isWorkerPlanning = false
@@ -513,7 +545,7 @@ export class SceneController {
     // 1. Visualize Tree from serialized data
     this.visualizeSearchTreeFromData(result.treeData)
 
-    // 2. Report Stats to React (including failure reason)
+    // 2. Report Stats to React (including failure reason and bidirectional stats)
     if (this.onStatsUpdate) {
       this.onStatsUpdate({
         time: result.time,
@@ -522,6 +554,9 @@ export class SceneController {
         failureReason: result.failureReason,
         failureDetails: result.failureDetails,
         isGreedy: false,
+        startNodes: result.startNodes,
+        goalNodes: result.goalNodes,
+        meetIteration: result.meetIteration,
       })
     }
 
@@ -816,7 +851,7 @@ export class SceneController {
         },
         params: effectiveParams,
         robotConfig: this.robot.CONFIG,
-        obstacleBox: this.getObstacleBox(),
+        obstacles: this.getObstacleBoxes(),
       }
 
       this.worker.postMessage(workerInput)
@@ -832,6 +867,11 @@ export class SceneController {
     } else {
       // Fallback to main thread if worker not available
       console.warn('[SceneController] Worker not available, using main thread')
+      // Rebuild planner with all obstacles
+      this.planner = new RRTPlanner(this.robot, [
+        this.obstacle,
+        ...this.extraObstacles,
+      ])
       this.runPlannerMainThread(startAngles, effectiveParams)
     }
   }
@@ -1102,5 +1142,332 @@ export class SceneController {
     if (this.ghostTreeMesh) {
       this.ghostTreeMesh.visible = visible
     }
+  }
+
+  // --- EXTRA OBSTACLES MANAGEMENT ---
+
+  // Clear all extra obstacles from the scene
+  private clearExtraObstacles() {
+    for (const m of this.extraObstacles) {
+      this.scene.remove(m)
+      m.geometry.dispose()
+      if (Array.isArray(m.material)) {
+        m.material.forEach((mm) => mm.dispose())
+      } else {
+        ;(m.material as THREE.Material).dispose()
+      }
+    }
+    this.extraObstacles = []
+  }
+
+  // Serialize all obstacles (main + extras + obstacle group) for worker
+  private getObstacleBoxes(): {
+    min: [number, number, number]
+    max: [number, number, number]
+  }[] {
+    const boxes: {
+      min: [number, number, number]
+      max: [number, number, number]
+    }[] = []
+
+    // Include main obstacle if it's visible (y > -5)
+    if (this.obstacle.position.y > -5) {
+      const box = new THREE.Box3().setFromObject(this.obstacle)
+      boxes.push({
+        min: [box.min.x, box.min.y, box.min.z],
+        max: [box.max.x, box.max.y, box.max.z],
+      })
+    }
+
+    // Include extra obstacles
+    for (const mesh of this.extraObstacles) {
+      const box = new THREE.Box3().setFromObject(mesh)
+      boxes.push({
+        min: [box.min.x, box.min.y, box.min.z],
+        max: [box.max.x, box.max.y, box.max.z],
+      })
+    }
+
+    // Include all meshes from the obstacle group (with world transforms)
+    this.obstacleGroup.updateMatrixWorld(true)
+    this.obstacleGroup.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) {
+        const box = new THREE.Box3().setFromObject(child)
+        boxes.push({
+          min: [box.min.x, box.min.y, box.min.z],
+          max: [box.max.x, box.max.y, box.max.z],
+        })
+      }
+    })
+
+    return boxes
+  }
+
+  // --- CONNECT SHOWCASE ENVIRONMENT ---
+  // Creates a C-shaped / narrow passage environment for step 3 to clearly
+  // demonstrate the bidirectional nature of RRT-Connect
+  public setupConnectShowcase() {
+    // Use the inverted_u preset for the connect showcase
+    this.setObstaclePreset('inverted_u', {
+      gapWidth: 0.8,
+      height: 2.0,
+      pillarThickness: 0.4,
+    })
+    this.setObstaclePosition(1.2, 0)
+    this.setTargetPosition(2.0, 1.0, 0.0)
+  }
+
+  // --- OBSTACLE PRESET SYSTEM ---
+
+  // Dimension parameters for each preset type
+  public static readonly PRESET_DEFAULTS = {
+    wall: { width: 2.0, height: 2.0, thickness: 0.2 },
+    inverted_u: { gapWidth: 0.8, height: 2.0, pillarThickness: 0.4 },
+    corridor: { corridorWidth: 0.6, length: 1.5, height: 1.5 },
+  }
+
+  /**
+   * Set a preset obstacle configuration with custom dimensions
+   * @param type The preset type to use
+   * @param params Optional dimension parameters (uses defaults if not provided)
+   * @param preservePosition If true, keeps the current position instead of resetting to default
+   */
+  public setObstaclePreset(
+    type: 'wall' | 'inverted_u' | 'corridor',
+    params?: Partial<{
+      // Wall params
+      width: number
+      height: number
+      thickness: number
+      // Inverted-U params
+      gapWidth: number
+      pillarThickness: number
+      // Corridor params
+      corridorWidth: number
+      length: number
+    }>,
+    preservePosition: boolean = false
+  ): void {
+    // Save current position before clearing
+    const currentPos = {
+      x: this.obstacleGroup.position.x,
+      z: this.obstacleGroup.position.z,
+    }
+    const isChangingType = this.currentObstaclePreset !== type
+
+    this.currentObstaclePreset = type
+
+    // Hide the main obstacle (we use the group now)
+    this.obstacle.position.set(0, -10, 0)
+    this.obstacle.scale.set(1, 1, 1)
+    this.obstacle.updateMatrixWorld()
+
+    // Clear previous obstacles from the group and extras
+    this.clearObstacleGroup()
+    this.clearExtraObstacles()
+
+    const mat = new THREE.MeshStandardMaterial({ color: 0x888888 })
+
+    // Merge provided params with defaults
+    const defaults = SceneController.PRESET_DEFAULTS[type]
+    const mergedParams = { ...defaults, ...params }
+
+    // Create meshes based on preset type
+    // All meshes are positioned relative to the group's origin (0,0,0)
+    // The group itself is then positioned at the default position
+    switch (type) {
+      case 'wall': {
+        const { width, height, thickness } = mergedParams as {
+          width: number
+          height: number
+          thickness: number
+        }
+        const wall = new THREE.Mesh(
+          new THREE.BoxGeometry(thickness, height, width),
+          mat
+        )
+        wall.position.set(0, height / 2, 0) // Center at y = height/2
+        this.obstacleGroup.add(wall)
+        break
+      }
+
+      case 'inverted_u': {
+        const { gapWidth, height, pillarThickness } = mergedParams as {
+          gapWidth: number
+          height: number
+          pillarThickness: number
+        }
+        // Two pillars + top bar (like a doorway/gate)
+        const pillarHeight = height
+        const halfGap = gapWidth / 2
+
+        const leftPillar = new THREE.Mesh(
+          new THREE.BoxGeometry(pillarThickness, pillarHeight, pillarThickness),
+          mat.clone()
+        )
+        leftPillar.position.set(
+          0,
+          pillarHeight / 2,
+          -(halfGap + pillarThickness / 2)
+        )
+        this.obstacleGroup.add(leftPillar)
+
+        const rightPillar = new THREE.Mesh(
+          new THREE.BoxGeometry(pillarThickness, pillarHeight, pillarThickness),
+          mat.clone()
+        )
+        rightPillar.position.set(
+          0,
+          pillarHeight / 2,
+          halfGap + pillarThickness / 2
+        )
+        this.obstacleGroup.add(rightPillar)
+
+        // Top bar spans the full width including pillars
+        const topBarWidth = gapWidth + pillarThickness * 2
+        const topBarHeight = 0.3
+        const topBar = new THREE.Mesh(
+          new THREE.BoxGeometry(pillarThickness, topBarHeight, topBarWidth),
+          mat.clone()
+        )
+        topBar.position.set(0, pillarHeight - topBarHeight / 2, 0)
+        this.obstacleGroup.add(topBar)
+        break
+      }
+
+      case 'corridor': {
+        const { corridorWidth, length, height } = mergedParams as {
+          corridorWidth: number
+          length: number
+          height: number
+        }
+        // Two parallel walls creating a narrow passage
+        const wallThickness = 0.2
+        const halfCorridor = corridorWidth / 2
+
+        const leftWall = new THREE.Mesh(
+          new THREE.BoxGeometry(length, height, wallThickness),
+          mat.clone()
+        )
+        leftWall.position.set(
+          0,
+          height / 2,
+          -(halfCorridor + wallThickness / 2)
+        )
+        this.obstacleGroup.add(leftWall)
+
+        const rightWall = new THREE.Mesh(
+          new THREE.BoxGeometry(length, height, wallThickness),
+          mat.clone()
+        )
+        rightWall.position.set(0, height / 2, halfCorridor + wallThickness / 2)
+        this.obstacleGroup.add(rightWall)
+        break
+      }
+    }
+
+    // Determine final position
+    let finalPos: { x: number; z: number }
+
+    if (preservePosition && !isChangingType) {
+      // Keep current position when just changing dimensions
+      finalPos = currentPos
+    } else {
+      // Use default positions per preset (Y is always 0 - ground level)
+      const defaultPositions: Record<typeof type, { x: number; z: number }> = {
+        wall: { x: 1.0, z: 0 },
+        inverted_u: { x: 1.2, z: 0 },
+        corridor: { x: 1.0, z: 0 },
+      }
+      finalPos = defaultPositions[type]
+    }
+
+    this.obstacleGroup.position.set(finalPos.x, 0, finalPos.z)
+    this.obstacleGroup.updateMatrixWorld(true)
+
+    // Notify callback
+    if (this.onObstacleMove) {
+      this.onObstacleMove({ x: finalPos.x, z: finalPos.z })
+    }
+  }
+
+  /**
+   * Get the current obstacle preset type
+   */
+  public getObstaclePreset(): 'wall' | 'inverted_u' | 'corridor' {
+    return this.currentObstaclePreset
+  }
+
+  /**
+   * Clear all meshes from the obstacle group
+   */
+  private clearObstacleGroup() {
+    while (this.obstacleGroup.children.length > 0) {
+      const child = this.obstacleGroup.children[0]
+      this.obstacleGroup.remove(child)
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose()
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose())
+        } else {
+          ;(child.material as THREE.Material).dispose()
+        }
+      }
+    }
+  }
+
+  /**
+   * Set obstacle group position (Y is always 0 - ground level)
+   */
+  public setObstaclePosition(x: number, z: number) {
+    // Y is always 0 - obstacles stay on the ground
+    this.obstacleGroup.position.set(x, 0, z)
+    this.obstacleGroup.updateMatrixWorld(true)
+
+    if (this.onObstacleMove) {
+      this.onObstacleMove({ x, z })
+    }
+  }
+
+  /**
+   * Get current obstacle group position
+   */
+  public getObstaclePosition(): { x: number; z: number } {
+    return {
+      x: this.obstacleGroup.position.x,
+      z: this.obstacleGroup.position.z,
+    }
+  }
+
+  /**
+   * Toggle between editing target and editing obstacles
+   */
+  public setEditingTarget(editTarget: boolean) {
+    this.editingTarget = editTarget
+
+    if (editTarget) {
+      // Editing target
+      this.transformControl.attach(this.targetMesh)
+      this.transformControl.enabled = true
+      this.transformControl.getHelper().visible = true
+      this.obstacleTransformControl.detach()
+      this.obstacleTransformControl.enabled = false
+      this.obstacleTransformControl.getHelper().visible = false
+    } else {
+      // Editing obstacles
+      this.transformControl.detach()
+      this.transformControl.enabled = false
+      this.transformControl.getHelper().visible = false
+      this.obstacleTransformControl.attach(this.obstacleGroup)
+      this.obstacleTransformControl.enabled = true
+      this.obstacleTransformControl.getHelper().visible = true
+    }
+  }
+
+  /**
+   * Check if currently editing target (vs obstacles)
+   */
+  public isEditingTarget(): boolean {
+    return this.editingTarget
   }
 }

@@ -25,23 +25,34 @@ export interface PlanResult {
   path: number[][] | null
   failureReason: FailureReason
   failureDetails?: string // Optional human-readable details
+  startNodes?: number // Number of nodes in the start tree (RRT-Connect)
+  goalNodes?: number // Number of nodes in the goal tree (RRT-Connect)
+  meetIteration?: number // Iteration at which the trees met (RRT-Connect)
 }
 
 export class RRTPlanner {
   private robot: Robot
-  private obstacleBox: THREE.Box3
+  private obstacleBoxes: THREE.Box3[]
   private TIME_LIMIT_MS = 3000 // Increased to 3 seconds for complex queries
 
   // Visualization helper
   public lastTrees: Node[] = []
 
-  // Accept either a Mesh (main thread) or Box3 directly (worker)
-  constructor(robot: Robot, obstacle: THREE.Mesh | THREE.Box3) {
+  // Accept either a Mesh (main thread), Box3 directly (worker), or an array of either
+  constructor(
+    robot: Robot,
+    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
+  ) {
     this.robot = robot
-    this.obstacleBox =
-      obstacle instanceof THREE.Box3
-        ? obstacle
-        : new THREE.Box3().setFromObject(obstacle)
+    this.obstacleBoxes = Array.isArray(obstacle)
+      ? obstacle.map((o) =>
+          o instanceof THREE.Box3 ? o : new THREE.Box3().setFromObject(o)
+        )
+      : [
+          obstacle instanceof THREE.Box3
+            ? obstacle
+            : new THREE.Box3().setFromObject(obstacle),
+        ]
   }
 
   public plan(
@@ -79,7 +90,7 @@ export class RRTPlanner {
 
     let goalAngles: number[] | null = null
 
-    const solution = this.robot.solveRobustIK(targetPos, this.obstacleBox)
+    const solution = this.robot.solveRobustIK(targetPos, this.obstacleBoxes)
 
     // this step checks for collisions based on the angles given by solveRobustIK
     // The planner needs to know: "Did the IK give me a perfect goal, or a broken one?"
@@ -92,7 +103,7 @@ export class RRTPlanner {
       // Still try to plan, but note this for potential failure
     }
 
-    if (!this.robot.checkCollision(solution, this.obstacleBox)) {
+    if (!this.robot.checkCollision(solution, this.obstacleBoxes)) {
       goalAngles = solution
       console.log('Found valid goal config.')
     } else {
@@ -114,7 +125,7 @@ export class RRTPlanner {
 
     // CRITICAL: RRT-Connect REQUIRES a valid goal configuration.
     // If the exact IK solution is in collision, try to find a valid configuration nearby.
-    if (this.robot.checkCollision(goalAngles, this.obstacleBox)) {
+    if (this.robot.checkCollision(goalAngles, this.obstacleBoxes)) {
       console.warn(
         'Goal in collision. Searching for valid neighbor for RRT-Connect...'
       )
@@ -135,7 +146,7 @@ export class RRTPlanner {
       }
     }
 
-    return this.planConnect(startAngles, goalAngles, params)
+    return this.planConnect(startAngles, goalAngles, targetPos, params)
   }
 
   /**
@@ -151,7 +162,7 @@ export class RRTPlanner {
       const candidate = angles.map(
         (a) => a + (Math.random() * range * 2 - range)
       )
-      if (!this.robot.checkCollision(candidate, this.obstacleBox)) {
+      if (!this.robot.checkCollision(candidate, this.obstacleBoxes)) {
         return candidate
       }
     }
@@ -171,7 +182,7 @@ export class RRTPlanner {
 
     // If distance is very small, just check the endpoint (optimization)
     if (dist < RESOLUTION) {
-      return !this.robot.checkCollision(to, this.obstacleBox)
+      return !this.robot.checkCollision(to, this.obstacleBoxes)
     }
 
     const steps = Math.ceil(dist / RESOLUTION)
@@ -180,7 +191,7 @@ export class RRTPlanner {
       const t = i / steps
       // Linear interpolation between joint angles
       const intermediate = from.map((val, idx) => val + (to[idx]! - val) * t)
-      if (this.robot.checkCollision(intermediate, this.obstacleBox)) {
+      if (this.robot.checkCollision(intermediate, this.obstacleBoxes)) {
         return false // Hit obstacle during transition
       }
     }
@@ -263,6 +274,7 @@ export class RRTPlanner {
   private planConnect(
     startAngles: number[],
     goalAngles: number[],
+    targetPos: THREE.Vector3,
     params: RRTParams
   ): PlanResult {
     const { stepSize, maxIter, goalBias } = params
@@ -305,11 +317,17 @@ export class RRTPlanner {
 
       if (newNodeA) {
         // 3. IF Tree A successfully grew, try to connect Tree B directly to that new node
-        const newNodeB = this.connect(treeB, newNodeA.angles, stepSize)
+        const newNodeB = this.connect(
+          treeB,
+          newNodeA.angles,
+          stepSize,
+          targetPos
+        )
 
         if (newNodeB) {
           // SUCCESS! The trees met.
-          console.log(`Connected after ${i} iterations!`)
+          const meetIteration = i
+          console.log(`Connected after ${meetIteration} iterations!`)
 
           // Updated the last trees to show the paths
           this.lastTrees = [...startTree, ...goalTree]
@@ -337,6 +355,9 @@ export class RRTPlanner {
           return {
             path: finalPath,
             failureReason: null,
+            startNodes: startTree.length,
+            goalNodes: goalTree.length,
+            meetIteration,
           }
         }
       }
@@ -402,7 +423,8 @@ export class RRTPlanner {
   private connect(
     tree: Node[],
     targetAngles: number[],
-    stepSize: number
+    stepSize: number,
+    targetPos?: THREE.Vector3 // Optional target position for task-space validation
   ): Node | null {
     let nearest = tree[0]
     let minDist = Infinity
@@ -432,9 +454,21 @@ export class RRTPlanner {
       tree.push(newNode)
       currentNode = newNode
 
-      // If very close, we connected!
+      // If very close in joint space, check task space too
       if (this.distance(newAngles, targetAngles) < 0.1) {
-        return newNode
+        // Also verify task-space distance if targetPos provided
+        if (targetPos) {
+          const tipPos = this.robot.getTipPosition(newAngles)
+          const taskSpaceDist = tipPos.distanceTo(targetPos)
+          if (taskSpaceDist < 0.15) {
+            // 15cm task-space threshold
+            return newNode
+          }
+          // Close in joint space but not in task space - keep trying
+          // Don't return yet, continue stepping
+        } else {
+          return newNode
+        }
       }
 
       // If steer didn't move us (we are stuck or at target), break

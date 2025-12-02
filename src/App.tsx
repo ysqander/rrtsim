@@ -116,8 +116,29 @@ function App() {
   // Show comparison with Standard RRT in step 3 (requires running Std RRT first in step 2)
   const [showComparison, setShowComparison] = useState(true)
 
-  // Obstacle Height (Default 2.0)
-  const [obstacleHeight, setObstacleHeight] = useState(2.0)
+  // Obstacle Preset System
+  const [obstaclePreset, setObstaclePreset] = useState<
+    'wall' | 'inverted_u' | 'corridor'
+  >('wall')
+  const [obstaclePos, setObstaclePos] = useState({ x: 1.0, z: 0 })
+  const [editingTarget, setEditingTarget] = useState(true) // true = target, false = obstacles
+
+  // Shape-specific dimension state
+  const [wallDims, setWallDims] = useState({
+    width: 2.0,
+    height: 2.0,
+    thickness: 0.2,
+  })
+  const [gateDims, setGateDims] = useState({
+    gapWidth: 0.8,
+    height: 2.0,
+    pillarThickness: 0.4,
+  })
+  const [corridorDims, setCorridorDims] = useState({
+    corridorWidth: 0.6,
+    length: 1.5,
+    height: 1.5,
+  })
 
   // Joint Count (displayed next to Robot section)
   const [jointCount, setJointCount] = useState(4) // Default robot has 4 joints
@@ -148,6 +169,7 @@ function App() {
       // ACTUALLY: Let's update the callback in useEffect whenever step changes.
     }
     controller.onTargetMove = setTargetPos
+    controller.onObstacleMove = (pos) => setObstaclePos(pos)
 
     // Get initial joint count
     setJointCount(controller.getJointCount())
@@ -222,10 +244,12 @@ function App() {
         controllerRef.current.resetJoints()
         setJointCount(controllerRef.current.getJointCount())
         console.log('[DEBUG] resetJoints done')
-        // 2. Reset Obstacle Height
-        setObstacleHeight(2.0)
-        controllerRef.current.setObstacleHeight(2.0)
-        console.log('[DEBUG] setObstacleHeight done')
+        // 2. Reset Obstacle to wall preset
+        setObstaclePreset('wall')
+        controllerRef.current.setObstaclePreset('wall', wallDims)
+        setEditingTarget(true)
+        controllerRef.current.setEditingTarget(true)
+        console.log('[DEBUG] setObstaclePreset done')
         // 3. Reset Target Position to the "Behind Wall" spot
         controllerRef.current.setTargetPosition(2.24, 2.59, 2.0)
         console.log('[DEBUG] setTargetPosition done')
@@ -252,10 +276,23 @@ function App() {
       controllerRef.current.setGhostTreeVisible(showComparison)
 
       if (tutorialMode) {
+        // Build the more challenging connect demo environment (inverted-U gate)
+        controllerRef.current.setupConnectShowcase()
+        setObstaclePreset('inverted_u')
+        setGateDims({ gapWidth: 0.8, height: 2.0, pillarThickness: 0.4 })
+        const pos = controllerRef.current.getObstaclePosition()
+        setObstaclePos(pos)
+        setEditingTarget(true)
+        controllerRef.current.setEditingTarget(true)
+
         // Apply WEAK defaults again to show improvement
         const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.0 }
         setRrtParams(weakParams)
         controllerRef.current.updateRRTParams(weakParams)
+
+        // Zoom out to see the whole scene
+        controllerRef.current.camera.position.set(5, 5, 8)
+        controllerRef.current.camera.lookAt(0, 1, 0)
       }
     } else {
       // Intro
@@ -285,15 +322,10 @@ function App() {
 
   const handleScenarioChange = (type: 'easy' | 'medium' | 'hard') => {
     setScenario(type)
-    // Reset obstacle height for new scenario? Or keep it?
-    // Let's reset to default 2.0 for consistency
-    setObstacleHeight(2.0)
     controllerRef.current?.setScenario(type)
-  }
-
-  const handleObstacleHeightChange = (newHeight: number) => {
-    setObstacleHeight(newHeight)
-    controllerRef.current?.setObstacleHeight(newHeight)
+    // Reset editing mode to target when changing scenarios
+    setEditingTarget(true)
+    controllerRef.current?.setEditingTarget(true)
   }
 
   const toggleDebug = () => {
@@ -741,6 +773,32 @@ function App() {
                             Time: {stats.time}ms
                             <br />
                             Nodes: {stats.nodes}
+                            {typeof stats.startNodes === 'number' &&
+                              typeof stats.goalNodes === 'number' && (
+                                <>
+                                  <br />
+                                  <span style={{ fontSize: '0.85rem' }}>
+                                    Start-tree: {stats.startNodes}
+                                  </span>
+                                  <br />
+                                  <span style={{ fontSize: '0.85rem' }}>
+                                    Goal-tree: {stats.goalNodes}
+                                  </span>
+                                </>
+                              )}
+                            {typeof stats.meetIteration === 'number' && (
+                              <>
+                                <br />
+                                <span
+                                  style={{
+                                    fontSize: '0.85rem',
+                                    color: '#88ff88',
+                                  }}
+                                >
+                                  Met at iter: {stats.meetIteration}
+                                </span>
+                              </>
+                            )}
                           </>
                         ) : (
                           <span>Running...</span>
@@ -1001,33 +1059,293 @@ function App() {
             </div>
           )}
 
+          {/* Obstacle Preset System */}
           <div
             className={`control-group ${
               !isInteractiveStep ? 'gated-control' : ''
             }`}
           >
-            <h4>Obstacle Height</h4>
-            <div className="parameter-control">
-              <input
-                type="range"
-                min="0.1"
-                max="4.0"
-                step="0.1"
-                value={obstacleHeight}
-                onChange={(e) =>
-                  handleObstacleHeightChange(parseFloat(e.target.value))
-                }
-              />
+            <h4>Obstacle Shape</h4>
+            <div className="button-group" style={{ marginBottom: '0.5rem' }}>
+              <button
+                className={obstaclePreset === 'wall' ? 'active' : ''}
+                onClick={() => {
+                  setObstaclePreset('wall')
+                  controllerRef.current?.setObstaclePreset('wall', wallDims)
+                  const pos = controllerRef.current?.getObstaclePosition()
+                  if (pos) setObstaclePos(pos)
+                }}
+                title="Simple vertical wall"
+              >
+                Wall
+              </button>
+              <button
+                className={obstaclePreset === 'inverted_u' ? 'active' : ''}
+                onClick={() => {
+                  setObstaclePreset('inverted_u')
+                  controllerRef.current?.setObstaclePreset(
+                    'inverted_u',
+                    gateDims
+                  )
+                  const pos = controllerRef.current?.getObstaclePosition()
+                  if (pos) setObstaclePos(pos)
+                }}
+                title="Two pillars with top bar (gate)"
+              >
+                ∩ Gate
+              </button>
+              <button
+                className={obstaclePreset === 'corridor' ? 'active' : ''}
+                onClick={() => {
+                  setObstaclePreset('corridor')
+                  controllerRef.current?.setObstaclePreset(
+                    'corridor',
+                    corridorDims
+                  )
+                  const pos = controllerRef.current?.getObstaclePosition()
+                  if (pos) setObstaclePos(pos)
+                }}
+                title="Narrow corridor"
+              >
+                Corridor
+              </button>
+            </div>
+
+            {/* Edit Mode Toggle */}
+            <div
+              style={{
+                display: 'flex',
+                gap: '0.5rem',
+                marginBottom: '0.5rem',
+              }}
+            >
+              <button
+                className={editingTarget ? 'active' : ''}
+                onClick={() => {
+                  setEditingTarget(true)
+                  controllerRef.current?.setEditingTarget(true)
+                }}
+                style={{ flex: 1, fontSize: '0.8rem' }}
+              >
+                🎯 Move Target
+              </button>
+              <button
+                className={!editingTarget ? 'active' : ''}
+                onClick={() => {
+                  setEditingTarget(false)
+                  controllerRef.current?.setEditingTarget(false)
+                }}
+                style={{ flex: 1, fontSize: '0.8rem' }}
+              >
+                📦 Move Obstacle
+              </button>
+            </div>
+
+            {/* Position Display (when editing obstacles) */}
+            {!editingTarget && (
               <div
                 style={{
-                  fontSize: '0.7rem',
+                  fontSize: '0.75rem',
                   color: '#888',
-                  textAlign: 'right',
+                  marginBottom: '0.5rem',
                 }}
               >
-                {obstacleHeight.toFixed(1)}m
+                Position: X={obstaclePos.x.toFixed(2)}, Z=
+                {obstaclePos.z.toFixed(2)}
               </div>
-            </div>
+            )}
+
+            {/* Shape-specific dimension sliders */}
+            {obstaclePreset === 'wall' && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Width: {wallDims.width.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="4.0"
+                    step="0.1"
+                    value={wallDims.width}
+                    onChange={(e) => {
+                      const width = parseFloat(e.target.value)
+                      const newDims = { ...wallDims, width }
+                      setWallDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'wall',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Height: {wallDims.height.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="4.0"
+                    step="0.1"
+                    value={wallDims.height}
+                    onChange={(e) => {
+                      const height = parseFloat(e.target.value)
+                      const newDims = { ...wallDims, height }
+                      setWallDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'wall',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {obstaclePreset === 'inverted_u' && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Gap Width: {gateDims.gapWidth.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.3"
+                    max="2.0"
+                    step="0.1"
+                    value={gateDims.gapWidth}
+                    onChange={(e) => {
+                      const gapWidth = parseFloat(e.target.value)
+                      const newDims = { ...gateDims, gapWidth }
+                      setGateDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'inverted_u',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Height: {gateDims.height.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="4.0"
+                    step="0.1"
+                    value={gateDims.height}
+                    onChange={(e) => {
+                      const height = parseFloat(e.target.value)
+                      const newDims = { ...gateDims, height }
+                      setGateDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'inverted_u',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Pillar Thickness: {gateDims.pillarThickness.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1.0"
+                    step="0.1"
+                    value={gateDims.pillarThickness}
+                    onChange={(e) => {
+                      const pillarThickness = parseFloat(e.target.value)
+                      const newDims = { ...gateDims, pillarThickness }
+                      setGateDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'inverted_u',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {obstaclePreset === 'corridor' && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Corridor Width: {corridorDims.corridorWidth.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.3"
+                    max="2.0"
+                    step="0.1"
+                    value={corridorDims.corridorWidth}
+                    onChange={(e) => {
+                      const corridorWidth = parseFloat(e.target.value)
+                      const newDims = { ...corridorDims, corridorWidth }
+                      setCorridorDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'corridor',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Length: {corridorDims.length.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3.0"
+                    step="0.1"
+                    value={corridorDims.length}
+                    onChange={(e) => {
+                      const length = parseFloat(e.target.value)
+                      const newDims = { ...corridorDims, length }
+                      setCorridorDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'corridor',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+                <div className="parameter-control">
+                  <label style={{ fontSize: '0.75rem' }}>
+                    Height: {corridorDims.height.toFixed(1)}m
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3.0"
+                    step="0.1"
+                    value={corridorDims.height}
+                    onChange={(e) => {
+                      const height = parseFloat(e.target.value)
+                      const newDims = { ...corridorDims, height }
+                      setCorridorDims(newDims)
+                      controllerRef.current?.setObstaclePreset(
+                        'corridor',
+                        newDims,
+                        true
+                      )
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div

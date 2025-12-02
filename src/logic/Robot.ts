@@ -467,10 +467,10 @@ export class Robot {
 
   // --- ROBUST IK SOLVER (CCD + Random Restarts) ---
   // Tries to find a solution that is also collision-free AND reaches the target
-  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker)
+  // Accepts either a Mesh (for main thread), a Box3 directly (for worker), or an array of either
   public solveRobustIK(
     targetPos: THREE.Vector3,
-    obstacle: THREE.Mesh | THREE.Box3
+    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
   ): number[] {
     const limits = this.getLimits()
     const DISTANCE_THRESHOLD = 0.1 // Must be this close to be valid
@@ -724,11 +724,11 @@ export class Robot {
   // calls this method to validate each potential configuration.
   //
   // Uses Line Segment Sampling instead of Mesh Bounding Boxes for accuracy.
-  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker).
+  // Accepts either a Mesh (for main thread), a Box3 directly (for worker), or an array of either.
   // ==========================================================================
   public checkCollision(
     angles: number[],
-    obstacle: THREE.Mesh | THREE.Box3
+    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
   ): boolean {
     // ========================================
     // PART 1: CHECK SELF-COLLISION FIRST
@@ -744,16 +744,21 @@ export class Robot {
     // PART 2: CHECK OBSTACLE COLLISION
     // ========================================
 
-    // 1. Get the Obstacle's Box ONCE (Fast)
-    // In a real app, cache this. Don't compute it every frame.
-    // Since the wall doesn't move, we assume its World Matrix is up to date.
-    const obstacleBox =
-      obstacle instanceof THREE.Box3
-        ? obstacle.clone()
-        : new THREE.Box3().setFromObject(obstacle)
+    // 1. Normalize to an array of Box3
+    const obstacleBoxes: THREE.Box3[] = Array.isArray(obstacle)
+      ? obstacle.map((o) =>
+          o instanceof THREE.Box3
+            ? o.clone()
+            : new THREE.Box3().setFromObject(o)
+        )
+      : [
+          obstacle instanceof THREE.Box3
+            ? obstacle.clone()
+            : new THREE.Box3().setFromObject(obstacle),
+        ]
 
     // Reset scalar expansion (no extra fatness, trust the spheres)
-    obstacleBox.expandByScalar(0.01)
+    obstacleBoxes.forEach((b) => b.expandByScalar(0.01))
 
     // 2. Get Virtual Skeleton Positions (Pure Math, No Visual Updates)
     // [Base, Waist, Shoulder, Elbow, Wrist, Tip]
@@ -764,7 +769,7 @@ export class Robot {
     const collisionRadius = this.getObstacleCollisionRadius()
     const jointRadius = this.getJointCollisionRadius()
 
-    // 4. Check Sampling Points along the bones
+    // 4. Check Sampling Points along the bones vs all obstacles
     // We iterate through the CONFIG to find segments (where visualLength > 0)
     // Uses the shared sampleSegmentPoints() helper for consistent sampling
     for (let i = 0; i < joints.length - 1; i++) {
@@ -779,15 +784,17 @@ export class Robot {
 
           for (const point of samplePoints) {
             const sphere = new THREE.Sphere(point, collisionRadius)
-            if (obstacleBox.intersectsSphere(sphere)) {
-              return true // HIT!
+            for (const box of obstacleBoxes) {
+              if (box.intersectsSphere(sphere)) {
+                return true // HIT!
+              }
             }
           }
         }
       }
     }
 
-    // 5. CHECK JOINT SPHERES DYNAMICALLY
+    // 5. CHECK JOINT SPHERES DYNAMICALLY vs all obstacles
     // We iterate through CONFIG to find 'revolute' joints that have large hubs
     // FIX: Also check fixed joints if they have geometry (like Tip)
     for (let index = 0; index < this.CONFIG.length; index++) {
@@ -797,8 +804,10 @@ export class Robot {
         const jointPos = joints[index]
         if (jointPos) {
           const sphere = new THREE.Sphere(jointPos, jointRadius)
-          if (obstacleBox.intersectsSphere(sphere)) {
-            return true // HIT!
+          for (const box of obstacleBoxes) {
+            if (box.intersectsSphere(sphere)) {
+              return true // HIT!
+            }
           }
         }
       }

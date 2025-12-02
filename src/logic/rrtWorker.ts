@@ -8,7 +8,7 @@ export interface WorkerInput {
   targetPos: { x: number; y: number; z: number }
   params: RRTParams
   robotConfig: LinkConfig[]
-  obstacleBox: { min: [number, number, number]; max: [number, number, number] }
+  obstacles: { min: [number, number, number]; max: [number, number, number] }[]
 }
 
 // Output data sent from worker back to main thread
@@ -19,22 +19,25 @@ export interface WorkerOutput {
   time: number
   failureReason?: FailureReason // Why planning failed (if it did)
   failureDetails?: string // Human-readable failure explanation
+  startNodes?: number // Number of nodes in the start tree (RRT-Connect)
+  goalNodes?: number // Number of nodes in the goal tree (RRT-Connect)
+  meetIteration?: number // Iteration at which the trees met (RRT-Connect)
   error?: string // Optional error message if planning failed due to an exception
 }
 
 // Worker message handler
 self.onmessage = (e: MessageEvent<WorkerInput>) => {
-  const { startAngles, targetPos, params, robotConfig, obstacleBox } = e.data
+  const { startAngles, targetPos, params, robotConfig, obstacles } = e.data
   const start = performance.now()
 
   try {
     // Reconstruct Three.js objects from serialized data
     const robot = new Robot(robotConfig)
-    const box = new THREE.Box3(
-      new THREE.Vector3(...obstacleBox.min),
-      new THREE.Vector3(...obstacleBox.max)
+    const boxes = obstacles.map(
+      (b) =>
+        new THREE.Box3(new THREE.Vector3(...b.min), new THREE.Vector3(...b.max))
     )
-    const planner = new RRTPlanner(robot, box)
+    const planner = new RRTPlanner(robot, boxes)
 
     // Run planning - now returns PlanResult with failure info
     const target = new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z)
@@ -55,6 +58,9 @@ self.onmessage = (e: MessageEvent<WorkerInput>) => {
       time: Math.round(performance.now() - start),
       failureReason: result.failureReason,
       failureDetails: result.failureDetails,
+      startNodes: result.startNodes,
+      goalNodes: result.goalNodes,
+      meetIteration: result.meetIteration,
     } as WorkerOutput)
   } catch (error) {
     // If anything goes wrong, send back a failure response
