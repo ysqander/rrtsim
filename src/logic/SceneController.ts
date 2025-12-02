@@ -187,6 +187,38 @@ export class SceneController {
     pan()
   }
 
+  public animateCameraOutro() {
+    const radius = 8 // Zoomed out further
+    const height = 4 // Higher up
+    // Full 360 orbit
+    const startAngle = 0
+    const endAngle = Math.PI * 2
+
+    const duration = 8000 // 8 seconds
+    const start = performance.now()
+
+    const orbit = () => {
+      const now = performance.now()
+      const t = Math.min((now - start) / duration, 1)
+      // Ease in-out cubic
+      // const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+      // Linear is better for continuous rotation
+      const ease = t
+
+      const angle = startAngle + (endAngle - startAngle) * ease
+      const x = Math.sin(angle) * radius
+      const z = Math.cos(angle) * radius
+
+      this.camera.position.set(x, height, z)
+      this.camera.lookAt(0, 1, 0)
+
+      if (t < 1) {
+        requestAnimationFrame(orbit)
+      }
+    }
+    orbit()
+  }
+
   // --- NEW: DYNAMIC JOINTS ---
   public addJoint() {
     this.robot.addJoint()
@@ -515,15 +547,9 @@ export class SceneController {
       return
     }
 
-    // RRT MODE
+    // If code does not enter the previous If block, then we are in RRT algo MODE
     // Ensure robot color is reset
     this.robot.setOverrideColor(null)
-
-    // Ensure startAngles are collision-free (sanity check)
-    // But if we are in 'Greedy' mode before, we might be crashed against the wall.
-    // Standard RRT will fail if start is invalid.
-    // Ideally we should have reset the robot to Home before running this step.
-    // The 'setAlgorithm' handles reset, but let's be safe.
 
     // Update params with current mode
     const effectiveParams: RRTParams = {

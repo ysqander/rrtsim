@@ -46,12 +46,18 @@ body {
 }
 
 .essay-panel { border-left: 4px solid #3498db; }
-.dashboard-panel { border-right: 4px solid #00ff00; height: fit-content; }
+.dashboard-panel { 
+    border-right: 4px solid #00ff00; 
+    height: fit-content;
+    max-width: 280px;
+    padding: 1.2rem;
+    gap: 1rem;
+}
 
 h1 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.5px; }
 .subtitle { margin: 0; color: #888; font-size: 0.9rem; }
 h3 { margin: 0 0 0.5rem 0; font-size: 0.8rem; text-transform: uppercase; color: #555; letter-spacing: 1px; }
-h4 { margin: 0 0 0.5rem 0; font-size: 0.75rem; color: #666; }
+h4 { margin: 0 0 0.4rem 0; font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
 
 p { font-size: 0.9rem; line-height: 1.5; color: #ccc; margin: 0; }
 .hint { font-size: 0.8rem; color: #888; font-style: italic; margin-top: 0.5rem; }
@@ -63,13 +69,13 @@ button {
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
     color: #ccc;
-    padding: 10px;
+    padding: 8px;
     border-radius: 6px;
     cursor: pointer;
     text-align: left;
     transition: all 0.2s;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
 }
 
 button:hover { background: rgba(255,255,255,0.1); color: white; }
@@ -79,17 +85,17 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
 .stat-card {
     background: rgba(0,0,0,0.3);
     border-radius: 8px;
-    padding: 1rem;
+    padding: 0.8rem;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.4rem;
 }
 
 .stat-row {
     display: flex;
     justify-content: space-between;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
 }
 
 .label { color: #666; }
@@ -106,13 +112,13 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
 .toggle-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     cursor: pointer;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     color: #fff;
 }
 
-.tiny-text { font-size: 0.7rem; color: #555; margin-top: 5px; }
+.tiny-text { font-size: 0.65rem; color: #555; margin-top: 3px; line-height: 1.3; }
 
 /* --- NEW STYLES --- */
 
@@ -147,11 +153,11 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
 .parameter-control {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    margin-bottom: 10px;
+    gap: 4px;
+    margin-bottom: 8px;
 }
 .parameter-control label {
-    font-size: 0.8rem;
+    font-size: 0.7rem;
     color: #aaa;
     font-family: 'JetBrains Mono', monospace;
 }
@@ -226,4 +232,15 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     color: #fff;
     font-family: 'JetBrains Mono', monospace;
     font-weight: bold;
+}
+
+/* Pulse Animation */
+@keyframes pulse-green {
+    0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+}
+
+.pulse-animation {
+    animation: pulse-green 2s infinite;
 }

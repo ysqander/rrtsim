@@ -38,12 +38,17 @@ export class RRTPlanner {
   ): number[][] | null {
     this.lastTrees = [] // Reset visualization
 
-    // --- STEP 1: FIND A VALID GOAL (Constraint Aware IK) ---
-    // We try multiple times to solve IK. If the solution hits the wall, we randomize and try again.
+    // --- STEP 1: FIND A VALID GOAL (Constraint Aware Inverse Kinematics) ---
+    // this is important for the RRT-connect version which starts exploring path from the target position as well as from the start position of the tip.
+
     let goalAngles: number[] | null = null
 
-    // REFACTORED: Use the robot's built-in Robust IK
     const solution = this.robot.solveRobustIK(targetPos, this.obstacle)
+
+    // this step checks for collisions based on the angles given by solveRobustIK
+    // The planner needs to know: "Did the IK give me a perfect goal, or a broken one?"
+    // If perfect: Great, we trust it fully.
+    // If broken (colliding): We still use it as a rough guide ("Bias"), but we log a warning.
 
     if (!this.robot.checkCollision(solution, this.obstacle)) {
       goalAngles = solution
@@ -58,7 +63,7 @@ export class RRTPlanner {
       goalAngles = solution
     }
 
-    // Dispatch based on algorithm
+    // Dispatch based on RRT algorithm version standard or connect
     if (params.algorithm === 'standard') {
       return this.planStandard(startAngles, goalAngles, targetPos, params)
     }
@@ -79,10 +84,6 @@ export class RRTPlanner {
         console.warn(
           'Could not find valid neighbor. RRT-Connect might fail or be invalid.'
         )
-        // We still attempt Connect (it might fail to add the root), or we could return null.
-        // Ideally, we should probably return null here if we are strict, but let's try Standard as last resort?
-        // User asked NOT to default to standard, but if we literally can't start the goal tree, we can't do Connect.
-        // Let's return null to signal "Target Unreachable" rather than bad behavior.
         return null
       }
     }
@@ -148,14 +149,14 @@ export class RRTPlanner {
     const { stepSize, maxIter, goalBias } = params
     const limits = this.robot.getLimits()
     const tree: Node[] = [{ angles: startAngles, parent: null }]
-    this.lastTrees = tree // Visualize this tree
+    this.lastTrees = tree
 
     const startTime = performance.now()
 
     for (let i = 0; i < maxIter; i++) {
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('Standard RRT Timeout')
-        this.lastTrees = tree // Visualize partial tree
+        this.lastTrees = tree
         // Return null to indicate failure, but tree is preserved in this.lastTrees
         return null
       }
@@ -182,10 +183,8 @@ export class RRTPlanner {
         // This handles cases where goalAngles might be slightly off or invalid
         const tipPos = this.robot.getTipPosition(newNode.angles)
         if (tipPos.distanceTo(targetPos) < 0.2) {
-          // 20cm tolerance
           console.log(`Standard RRT Success after ${i} nodes`)
           const path = this.getPathFromRoot(newNode)
-          // path.unshift(goalAngles) // Don't force specific goal angles if we just reached the position
           return path.reverse()
         }
       }

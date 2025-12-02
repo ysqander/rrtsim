@@ -17,6 +17,8 @@ function App() {
   const [debugMode, setDebugMode] = useState(false)
   // Tutorial Mode: If true, enforces lesson scenarios. If false, allows free exploration.
   const [tutorialMode, setTutorialMode] = useState(true)
+  // Auto-Swivel: Automatically orbit camera after running planner (once, then auto-disables)
+  const [autoSwivel, setAutoSwivel] = useState(true)
 
   // Obstacle Height (Default 2.0)
   const [obstacleHeight, setObstacleHeight] = useState(2.0)
@@ -106,6 +108,10 @@ function App() {
       console.log('[DEBUG] setAlgorithm done')
       controllerRef.current.setInteraction(true)
 
+      // Zoom out slightly to see the whole robot
+      controllerRef.current.camera.position.set(4, 4, 8)
+      controllerRef.current.camera.lookAt(0, 1, 0)
+
       if (tutorialMode) {
         console.log('[DEBUG] Tutorial mode: resetting scene')
         // FORCE RESET SCENE STATE for consistent "Failure" Demo
@@ -128,7 +134,7 @@ function App() {
       // but if it's NOT tutorial mode, maybe we shouldn't force them?
       // The prompt implies "free exploration", so let's ONLY set weak params in Tutorial Mode.
       if (tutorialMode) {
-        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.0 }
         setRrtParams(weakParams)
         controllerRef.current.updateRRTParams(weakParams)
         console.log('[DEBUG] updateRRTParams done')
@@ -323,21 +329,32 @@ function App() {
           {step === 2 && (
             <div className="step-content fade-in">
               <h1>2. Standard RRT</h1>
-              <p className="subtitle">Single Tree Exploration</p>
+              <p className="subtitle">Single Tree Random Exploration</p>
 
               <div className="explanation">
-                <h3>Exploring the Unknown</h3>
                 <p>
-                  Standard RRT grows a single tree from the start. It explores
-                  blindly.
+                  This algorithm grows a "Tree" of valid movements—essentially a
+                  map of safe places the robot has visited. It starts by picking
+                  a random joint configuration somewhere in the room. Then, it
+                  looks at its existing map (the tree) and finds the spot
+                  closest to that random point. From there, it grows a single
+                  small "twig" toward the random target. If this new step
+                  doesn't hit a wall, it's added to the map. In the next
+                  iteration, it picks a brand new random target and repeats the
+                  process, slowly building a bushy web of safe paths until one
+                  of them touches the goal.
                   <br />
                   <br />
                   <b>Try it:</b> Click "Run Planner".
                   <br />
                   Notice how "bushy" the tree is? It explores everywhere! But
                   for this "Behind the Wall" target, it will likely{' '}
-                  <b>FAIL (botos will not snap to the target position)</b> or
-                  time out. This is because it doesn't know where to go.
+                  <b>
+                    FAIL (the robot tip will not move to the target position)
+                  </b>{' '}
+                  or time out. This is because this algorithm search a little
+                  all over the place (since it picks points to extend toward
+                  randomly).
                   <br />
                   <br />
                   <b>Parameter Guide:</b>
@@ -403,25 +420,53 @@ function App() {
                 </div>
               </div>
 
-              <div className="nav-buttons">
-                <button onClick={() => handleStepChange(1)}>Back</button>
+              <div
+                className="nav-buttons"
+                style={{ flexDirection: 'column', gap: '0.5rem' }}
+              >
                 <button
-                  className="run-btn"
-                  onClick={() => controllerRef.current?.runPlanner()}
-                  style={{
-                    backgroundColor: '#2ecc71',
-                    color: 'white',
-                    fontWeight: 'bold',
+                  className={`primary-btn ${!stats ? 'pulse-animation' : ''}`}
+                  onClick={() => {
+                    controllerRef.current?.runPlanner()
+                    if (autoSwivel) {
+                      // Trigger the "Swivel" animation to show off the scene
+                      setTimeout(() => {
+                        controllerRef.current?.animateCameraOutro()
+                      }, 1000) // Wait 1s for tree to start appearing
+                      // Auto-disable after first use
+                      setAutoSwivel(false)
+                    }
                   }}
+                  style={{ width: '100%', marginBottom: '0.5rem' }}
                 >
                   ▶ Run Planner
                 </button>
-                <button
-                  className="primary-btn"
-                  onClick={() => handleStepChange(3)}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '1rem',
+                    justifyContent: 'space-between',
+                  }}
                 >
-                  Next: Optimization &rarr;
-                </button>
+                  <button
+                    onClick={() => handleStepChange(1)}
+                    style={{ flex: 1 }}
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={() => handleStepChange(3)}
+                    disabled={!stats}
+                    style={{
+                      flex: 1,
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      opacity: stats ? 1 : 0.3,
+                      cursor: stats ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    Next: Optimization
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -591,8 +636,11 @@ function App() {
         <div className="dashboard-panel">
           <h3>Simulation Control</h3>
 
+          {/* Visual Settings Group */}
           <div className="control-group">
-            <label className="toggle-row" style={{ marginBottom: '1rem' }}>
+            <h4>Visual Settings</h4>
+
+            <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
               <input
                 type="checkbox"
                 checked={tutorialMode}
@@ -602,7 +650,34 @@ function App() {
                 Tutorial Mode {tutorialMode ? '(ON)' : '(OFF)'}
               </span>
             </label>
+            <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
+              Resets scene to pre-configured states for each lesson step.
+            </p>
 
+            <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
+              <input
+                type="checkbox"
+                checked={autoSwivel}
+                onChange={() => setAutoSwivel(!autoSwivel)}
+              />
+              <span style={{ color: autoSwivel ? '#2ecc71' : '#aaa' }}>
+                Auto-Swivel Camera
+              </span>
+            </label>
+            <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
+              Orbits camera after running planner (auto-disables after first
+              use).
+            </p>
+
+            <button
+              onClick={() => controllerRef.current?.setTargetPosition(2, 2, 0)}
+              style={{ width: '100%', marginBottom: '0.5rem' }}
+            >
+              Reset Target Position
+            </button>
+          </div>
+
+          <div className="control-group">
             <h4>Scenario</h4>
             <div className="button-group">
               <button

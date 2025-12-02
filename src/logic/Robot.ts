@@ -472,8 +472,7 @@ export class Robot {
     })
   }
 
-  // --- COLLISION CHECKER ---
-  // NEW HELPER: Get positions of all joints in the chain
+  // --- HELPER FOR COLLISION CHECK (below) ---
   public getJointPositions(angles: number[]) {
     const matrices = this.computeFK(angles)
 
