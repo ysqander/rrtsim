@@ -15,6 +15,8 @@ function App() {
   } | null>(null)
   const [scenario, setScenario] = useState<'easy' | 'medium' | 'hard'>('medium')
   const [debugMode, setDebugMode] = useState(false)
+  // Tutorial Mode: If true, enforces lesson scenarios. If false, allows free exploration.
+  const [tutorialMode, setTutorialMode] = useState(true)
 
   // Obstacle Height (Default 2.0)
   const [obstacleHeight, setObstacleHeight] = useState(2.0)
@@ -90,29 +92,58 @@ function App() {
       setDebugMode(false)
       controllerRef.current.toggleCollisionDebug(false)
 
-      // HARDCODED FAIL CASE:
-      // Wall is at z=1. Robot at z=0.
-      // Target at (0.5, 1.5, 2.0) -> Behind wall.
-      // Robot tries to go straight -> Collision.
-      controllerRef.current.setTargetPosition(0.39, 1.65, 2.0)
+      if (tutorialMode) {
+        // HARDCODED FAIL CASE:
+        // Wall is at z=1. Robot at z=0.
+        // Target at (0.5, 1.5, 2.0) -> Behind wall.
+        // Robot tries to go straight -> Collision.
+        controllerRef.current.setTargetPosition(0.39, 1.65, 2.0)
+      }
     } else if (newStep === 2) {
       // Switching to Standard RRT (The "Bushy" Tree)
+      console.log('[DEBUG] Entering Step 2. TutorialMode:', tutorialMode)
       controllerRef.current.setAlgorithm('rrt-standard', true)
+      console.log('[DEBUG] setAlgorithm done')
       controllerRef.current.setInteraction(true)
 
+      if (tutorialMode) {
+        console.log('[DEBUG] Tutorial mode: resetting scene')
+        // FORCE RESET SCENE STATE for consistent "Failure" Demo
+        // 1. Reset Joints
+        controllerRef.current.resetJoints()
+        console.log('[DEBUG] resetJoints done')
+        // 2. Reset Obstacle Height
+        setObstacleHeight(2.0)
+        controllerRef.current.setObstacleHeight(2.0)
+        console.log('[DEBUG] setObstacleHeight done')
+        // 3. Reset Target Position to the "Behind Wall" spot
+        controllerRef.current.setTargetPosition(2.24, 2.59, 2.0)
+        console.log('[DEBUG] setTargetPosition done')
+      }
+
       // Apply WEAK defaults for "Failure" demo
-      const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
-      setRrtParams(weakParams)
-      controllerRef.current.updateRRTParams(weakParams)
+      // We might want to apply these even in non-tutorial mode for comparison,
+      // OR maybe we should trust the user's settings?
+      // Let's stick to the plan: "Parameter defaults should probably still happen"
+      // but if it's NOT tutorial mode, maybe we shouldn't force them?
+      // The prompt implies "free exploration", so let's ONLY set weak params in Tutorial Mode.
+      if (tutorialMode) {
+        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+        setRrtParams(weakParams)
+        controllerRef.current.updateRRTParams(weakParams)
+        console.log('[DEBUG] updateRRTParams done')
+      }
     } else if (newStep === 3) {
       // Switching to RRT-Connect (The "Fast" Solution)
       controllerRef.current.setAlgorithm('rrt', true)
       controllerRef.current.setInteraction(true)
 
-      // Apply WEAK defaults again to show improvement
-      const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
-      setRrtParams(weakParams)
-      controllerRef.current.updateRRTParams(weakParams)
+      if (tutorialMode) {
+        // Apply WEAK defaults again to show improvement
+        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+        setRrtParams(weakParams)
+        controllerRef.current.updateRRTParams(weakParams)
+      }
     } else {
       // Intro
       controllerRef.current.setAlgorithm('rrt')
@@ -156,6 +187,10 @@ function App() {
     const newVal = !debugMode
     setDebugMode(newVal)
     controllerRef.current?.toggleCollisionDebug(newVal)
+  }
+
+  const toggleTutorialMode = () => {
+    setTutorialMode(!tutorialMode)
   }
 
   const handleParamChange = (key: keyof typeof rrtParams, value: number) => {
@@ -204,18 +239,22 @@ function App() {
               <div className="explanation">
                 <h3>Welcome</h3>
                 <p className="placeholder-text">
-                  [PLACEHOLDER: INTRO TEXT]
                   <br />
-                  Robotics is about movement. But how do we get from A to B
-                  without hitting C? In this interactive tutorial, we will
-                  explore the fundamental challenges of high-dimensional path
-                  planning.
+                  Robotics is about movement under constraints. But how do we
+                  get from A to B without hitting obstacle C? In this
+                  interactive tutorial, we will explore an advanced algorithm
+                  used in industrial applications that help us plan paths calls
+                  RRT-connect.
                   <br />
                   <br />
-                  We start with the intuitive approach: just moving towards the
-                  goal. Then we discover why that fails in complex environments.
-                  Finally, we build up to RRT-Connect, a probabilistic algorithm
-                  used in autonomous driving and industrial robotics.
+                  You don't need to know anything about robotics to learn this.
+                  This is a tutorial to build intuition using a multiple joint
+                  robot arm. The constraints are the number of joints, the
+                  angles that the joints can take and the length of the arms.
+                  We'll start with a simplistic approach "The Greedy Approach"
+                  and see a case where it fails. Then we'll explore RRT or
+                  Rapidly-exploring Random Tree and its more efficient variant
+                  RRT-Connect)
                 </p>
               </div>
 
@@ -231,40 +270,33 @@ function App() {
           {step === 1 && (
             <div className="step-content fade-in">
               <h1>1. The Greedy Approach</h1>
-              <p className="subtitle">Inverse Kinematics (IK)</p>
-
               <div className="explanation">
-                <h3>Intuition: Greedy Search</h3>
                 <p className="placeholder-text">
-                  [PLACEHOLDER: GREEDY INTUITION]
                   <br />
-                  The simplest idea is "Greedy Descent". At every step, we try
-                  to minimize the distance to the target. This is what Inverse
-                  Kinematics (IK) does. It solves the mathematical equations to
-                  put the hand exactly where you want it.
+                  This uses Cyclic Coordinate Descent algorithm. It is as if
+                  each joint in the robot arm, "looks" at the current position
+                  of the tip of the robot and the target position and decides to
+                  rotate itself to minimize that distance.
                   <br />
                   <br />
-                  Try dragging the red target ball around. Notice how the robot
-                  follows perfectly... until it doesn't.
+                  By looping through each joint, and doing this wiggle rotation
+                  adjustment at each joint, we get closer and closer. In low
+                  complexity cases, the end point reaches the target.
                 </p>
 
-                <h3>Why it Fails</h3>
+                <h3 style={{ marginTop: '2rem', fontSize: '1.25rem' }}>
+                  Why it Fails
+                </h3>
                 <p className="placeholder-text">
-                  [PLACEHOLDER: FAILURE CASES]
-                  <br />
-                  Greedy algorithms get stuck in "Local Minima". If there is a
-                  wall between the robot and the goal, the greedy approach tries
-                  to go *through* the wall because that is the shortest
-                  mathematical path. It has no concept of "backing up" to go
-                  around.
+                  Greedy algorithms optimize for the <strong>IMMEDIATE</strong>{' '}
+                  shortest path. Each joint rotates to get the tip closer to the
+                  target right now. It doesn't "plan ahead" or realize that
+                  sometimes you need to move *away* from the target (or around a
+                  wall) to eventually reach it.
                 </p>
               </div>
 
               <div className="controls-section">
-                <p className="hint">
-                  Drag the red ball to see the Greedy algorithm fail against the
-                  wall.
-                </p>
                 <button
                   className="secondary-btn"
                   onClick={() => {
@@ -413,6 +445,7 @@ function App() {
                   <b>Action:</b> Even with the same "Weak" parameters, click
                   "Run". Does it solve it? Or does it get closer?
                   <br />
+                  <br />
                   It's much more efficient, often finding a path where Standard
                   RRT fails completely.
                 </p>
@@ -559,6 +592,17 @@ function App() {
           <h3>Simulation Control</h3>
 
           <div className="control-group">
+            <label className="toggle-row" style={{ marginBottom: '1rem' }}>
+              <input
+                type="checkbox"
+                checked={tutorialMode}
+                onChange={toggleTutorialMode}
+              />
+              <span style={{ color: tutorialMode ? '#2ecc71' : '#aaa' }}>
+                Tutorial Mode {tutorialMode ? '(ON)' : '(OFF)'}
+              </span>
+            </label>
+
             <h4>Scenario</h4>
             <div className="button-group">
               <button

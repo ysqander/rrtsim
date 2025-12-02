@@ -325,7 +325,7 @@ export class Robot {
   }
 
   // --- GENERIC FK SOLVER ---
-  // Calculates the position of every link given a set of angles
+  // Calculates the position of every joint given a set of angles
   private computeFK(angles: number[]) {
     let currentGlobal = new THREE.Matrix4() // Start at Identity (0,0,0)
 
@@ -358,12 +358,15 @@ export class Robot {
     return matrices
   }
 
-  // --- GENERIC IK SOLVER (CCD) ---
+  // --- GENERIC IK SOLVER (CCD)  used in the Greedy approach---
+  // In simple terms, it is as if each joint in the robot arm, "looks" at the current position of the tip of the robot and the target position and decides to rotate itself to minimize tht distance.
+  // By looping through each joint, and doing this wiggle adjustments, we get closer and closer and in simple reachable cases, the end point gets to the target. It's counterintuitive that this simple approach works but it does.
+
   public calculateIK(
     targetPos: THREE.Vector3,
     initialAngles?: number[]
   ): number[] {
-    const angles = initialAngles ? [...initialAngles] : this.getCurrentAngles()
+    const angles = initialAngles ? [...initialAngles] : this.getCurrentAngles() // this gets the initial angles of every joint in the robot
     const iterations = 15
     const threshold = 0.01
 
@@ -371,14 +374,10 @@ export class Robot {
     for (let iter = 0; iter < iterations; iter++) {
       // Iterate BACKWARDS through joints (Tip -> Base)
       for (let j = this.joints.length - 1; j >= 0; j--) {
-        // A. Compute FK to find where all the joints are currently
+        // A. Compute the position of every joint relative to the origin (0,0,0) also called Wolrd Space
         const fkMatrices = this.computeFK(angles)
 
-        // The last matrix in fkMatrices corresponds to the EndEffector (Tip)
-        // But we need to map joint index 'j' to the CONFIG index.
-        // Since Config has "Base" (fixed) at 0, Joint 0 (Waist) is Config[1].
-        // A safer way is to grab the matrix matching the EndEffector config index.
-        const tipMatrix = fkMatrices[this.CONFIG.length - 1]
+        const tipMatrix = fkMatrices[this.CONFIG.length - 1] // we grab the last matrix whic is the tip or end-effector (whatever would be doing the action)
         const currentTipPos = new THREE.Vector3().setFromMatrixPosition(
           tipMatrix!
         )

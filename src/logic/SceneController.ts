@@ -196,7 +196,9 @@ export class SceneController {
     this.makeGhost(this.ghostRobot.sceneObject)
 
     // Re-run planner if auto-update is desired, or just reset
-    this.runPlanner()
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
   }
 
   public removeJoint() {
@@ -210,14 +212,18 @@ export class SceneController {
     this.scene.updateMatrixWorld(true)
 
     // Re-run planner if auto-update is desired, or just reset
-    this.runPlanner()
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
   }
 
   public resetJoints() {
     this.robot.resetConfig()
     this.ghostRobot.resetConfig()
     this.makeGhost(this.ghostRobot.sceneObject)
-    this.runPlanner()
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
   }
 
   // --- NEW: INTERACTION CONTROL ---
@@ -272,7 +278,9 @@ export class SceneController {
     }
 
     this.obstacle.updateMatrixWorld() // Critical update
-    this.runPlanner() // Auto-run for effect
+    if (this.algorithm === 'greedy') {
+      this.runPlanner() // Auto-run for effect
+    }
   }
 
   // --- NEW: Dynamic Wall Adjustment ---
@@ -290,13 +298,24 @@ export class SceneController {
     this.obstacle.updateMatrixWorld()
 
     // Re-run current planner logic
-    this.runPlanner()
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
   }
 
   public setAlgorithm(
     mode: 'greedy' | 'rrt' | 'rrt-standard',
     reset: boolean = false
   ) {
+    console.log(
+      '[DEBUG] setAlgorithm called. Mode:',
+      mode,
+      'Reset:',
+      reset,
+      'Current:',
+      this.algorithm
+    )
+
     // NEW: Snapshot if transitioning FROM Standard RRT TO Connect
     if (this.algorithm === 'rrt-standard' && mode === 'rrt') {
       this.snapshotStandardTree()
@@ -306,6 +325,7 @@ export class SceneController {
     }
 
     this.algorithm = mode
+    console.log('[DEBUG] Algorithm now set to:', this.algorithm)
     // Hide ghost in both modes as per new plan (Wait, plan said hide ghost robot, not ghost tree)
     // Ghost Robot (the green one) is different from Ghost Tree.
     this.ghostRobot.sceneObject.visible = false
@@ -357,9 +377,7 @@ export class SceneController {
 
   public updateRRTParams(params: RRTParams) {
     this.rrtParams = params
-    if (this.algorithm === 'rrt') {
-      this.runPlanner()
-    }
+    // No auto-run. User must click "Run Planner".
   }
 
   // --- NEW: DEBUG TOGGLE ---
@@ -455,6 +473,8 @@ export class SceneController {
   }
 
   public runPlanner() {
+    console.log('[DEBUG] runPlanner called. Algorithm:', this.algorithm)
+    console.trace('[DEBUG] Stack trace:')
     console.log('Planning...')
     const start = performance.now()
     const startAngles = this.robot.getCurrentAngles()
@@ -467,8 +487,7 @@ export class SceneController {
     }
 
     if (this.algorithm === 'greedy') {
-      // GREEDY IK MODE
-      // Just calculate IK and move there immediately
+      // The greedy approach
       const sol = this.robot.calculateIK(this.targetMesh.position)
       this.robot.setAngles(sol)
 
@@ -750,7 +769,7 @@ export class SceneController {
     const material = new THREE.LineBasicMaterial({
       color: 0xff5555, // Red/Orange
       transparent: true,
-      opacity: 0.2, // Faint
+      opacity: 0.5, // Increased from 0.2 to 0.5 for better visibility
       depthWrite: false,
     })
 
