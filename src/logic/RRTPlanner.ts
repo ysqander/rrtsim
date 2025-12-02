@@ -32,7 +32,7 @@ export class RRTPlanner {
     params: RRTParams = {
       stepSize: 0.05,
       maxIter: 20000,
-      goalBias: 0.05,
+      goalBias: 0.0,
       algorithm: 'connect',
     }
   ): number[][] | null {
@@ -217,7 +217,7 @@ export class RRTPlanner {
         return null
       }
 
-      // 1. Random Sample (Respecting joint angle limits) with Goal Bias
+      // 1. We take a random point to extend the tree towards just like in standard RTT see planStandard function
       let sample: number[] = []
       if (goalAngles && Math.random() < goalBias) {
         sample = [...goalAngles]

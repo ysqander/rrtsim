@@ -146,7 +146,7 @@ function App() {
 
       if (tutorialMode) {
         // Apply WEAK defaults again to show improvement
-        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.05 }
+        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.0 }
         setRrtParams(weakParams)
         controllerRef.current.updateRRTParams(weakParams)
       }
@@ -215,25 +215,29 @@ function App() {
               className={step === 0 ? 'active' : ''}
               onClick={() => handleStepChange(0)}
             >
-              Intro
+              <span className="step-number">0</span>
+              <span className="step-label">Intro</span>
             </button>
             <button
               className={step === 1 ? 'active' : ''}
               onClick={() => handleStepChange(1)}
             >
-              1. Greedy
+              <span className="step-number">1</span>
+              <span className="step-label">Greedy</span>
             </button>
             <button
               className={step === 2 ? 'active' : ''}
               onClick={() => handleStepChange(2)}
             >
-              2. Std RRT
+              <span className="step-number">2</span>
+              <span className="step-label">Std RRT</span>
             </button>
             <button
               className={step === 3 ? 'active' : ''}
               onClick={() => handleStepChange(3)}
             >
-              3. Connect
+              <span className="step-number">3</span>
+              <span className="step-label">RRT Connect</span>
             </button>
           </div>
 
@@ -479,13 +483,26 @@ function App() {
               <div className="explanation">
                 <h3>Meeting in the Middle</h3>
                 <p>
-                  Standard RRT struggled with the wall. Now let's try
-                  <b>RRT-Connect</b>.
+                  Standard RRT might struggle to find the target if it
+                  relatively far and in a complex position (behind obstacle).
+                  It's also inneficient. Bi directional RRT connect is a
+                  solution.
                   <br />
                   <br />
-                  It grows <b>two trees</b>: one from start, one from goal. They
-                  aggressively try to meet in the middle.
+                  The algo grows <b>two trees</b>: one from start, one from
+                  goal. They aggressively try to meet in the middle.
                   <br />
+                  <br />
+                  Each tree takes turn. One takes a step toward a random point
+                  and the other one "looks" at where the new extension is and
+                  tried to extend its nearest node to it. then the swap roles
+                  and redo the same process.
+                  <br />
+                  <br />
+                  <b>
+                    This random step and connect in turn might seem like it'S
+                    going to be chaotic but it is actually very efficient.
+                  </b>
                   <br />
                   <b>Action:</b> Even with the same "Weak" parameters, click
                   "Run". Does it solve it? Or does it get closer?
@@ -565,7 +582,8 @@ function App() {
                       }}
                     >
                       The faint red ghost tree shows the volume Standard RRT had
-                      to explore.
+                      to explore (on the last attempt you ran on tab 2. Std
+                      RRT).
                     </p>
                   </div>
                 )}
