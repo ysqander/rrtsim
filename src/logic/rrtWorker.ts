@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { Robot, type LinkConfig } from './Robot'
-import { RRTPlanner, type RRTParams } from './RRTPlanner'
+import { RRTPlanner, type RRTParams, type FailureReason } from './RRTPlanner'
 
 // Input data sent from main thread to worker
 export interface WorkerInput {
@@ -17,6 +17,8 @@ export interface WorkerOutput {
   treeData: { angles: number[]; parentIndex: number | null }[]
   success: boolean
   time: number
+  failureReason?: FailureReason // Why planning failed (if it did)
+  failureDetails?: string // Human-readable failure explanation
   error?: string // Optional error message if planning failed due to an exception
 }
 
@@ -34,9 +36,9 @@ self.onmessage = (e: MessageEvent<WorkerInput>) => {
     )
     const planner = new RRTPlanner(robot, box)
 
-    // Run planning
+    // Run planning - now returns PlanResult with failure info
     const target = new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z)
-    const path = planner.plan(startAngles, target, params)
+    const result = planner.plan(startAngles, target, params)
 
     // Serialize tree for visualization (strip circular parent refs)
     // We convert the Node[] with parent references to a flat array with parentIndex
@@ -45,12 +47,14 @@ self.onmessage = (e: MessageEvent<WorkerInput>) => {
       parentIndex: node.parent ? planner.lastTrees.indexOf(node.parent) : null,
     }))
 
-    // Send result back to main thread
+    // Send result back to main thread with failure reason if applicable
     self.postMessage({
-      path,
+      path: result.path,
       treeData,
-      success: !!path,
+      success: !!result.path,
       time: Math.round(performance.now() - start),
+      failureReason: result.failureReason,
+      failureDetails: result.failureDetails,
     } as WorkerOutput)
   } catch (error) {
     // If anything goes wrong, send back a failure response

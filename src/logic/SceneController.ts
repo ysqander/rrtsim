@@ -2,13 +2,16 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { Robot } from './Robot.ts'
-import { RRTPlanner, type RRTParams } from './RRTPlanner.ts'
+import { RRTPlanner, type RRTParams, type FailureReason } from './RRTPlanner.ts'
 import type { WorkerInput, WorkerOutput } from './rrtWorker.ts'
 
 export type PlannerStats = {
   time: number
   nodes: number
   success: boolean
+  failureReason?: FailureReason // Why planning failed (if it did)
+  failureDetails?: string // Human-readable failure explanation
+  isGreedy?: boolean // To differentiate Greedy vs RRT failures
 }
 
 // Serialized tree node for visualization (from worker)
@@ -495,7 +498,8 @@ export class SceneController {
     }
 
     console.log(
-      `[SceneController] Worker finished in ${result.time}ms. Success: ${result.success}`
+      `[SceneController] Worker finished in ${result.time}ms. Success: ${result.success}`,
+      result.failureReason ? `Reason: ${result.failureReason}` : ''
     )
 
     if (!result.success) {
@@ -509,12 +513,15 @@ export class SceneController {
     // 1. Visualize Tree from serialized data
     this.visualizeSearchTreeFromData(result.treeData)
 
-    // 2. Report Stats to React
+    // 2. Report Stats to React (including failure reason)
     if (this.onStatsUpdate) {
       this.onStatsUpdate({
         time: result.time,
         nodes: result.treeData.length,
         success: result.success,
+        failureReason: result.failureReason,
+        failureDetails: result.failureDetails,
+        isGreedy: false,
       })
     }
 
@@ -728,8 +735,10 @@ export class SceneController {
       const sol = this.robot.calculateIK(this.targetMesh.position)
       this.robot.setAngles(sol)
 
-      // Check collision
-      const hit = this.robot.checkCollision(sol, this.obstacle)
+      // Check collision types
+      const selfCollision = this.robot.checkSelfCollision(sol)
+      const obstacleCollision = this.robot.checkCollision(sol, this.obstacle)
+      const hit = selfCollision || obstacleCollision
 
       // Visual Feedback for Hit
       if (hit) {
@@ -738,12 +747,29 @@ export class SceneController {
         this.robot.setOverrideColor(null) // Restore
       }
 
+      // Determine failure reason for Greedy
+      let failureReason: FailureReason = null
+      let failureDetails: string | undefined
+
+      if (selfCollision) {
+        failureReason = 'self_collision'
+        failureDetails =
+          'The direct path causes the robot to collide with itself.'
+      } else if (obstacleCollision) {
+        failureReason = 'goal_in_collision'
+        failureDetails =
+          'The direct path is blocked by an obstacle. Try using RRT to find an alternate path.'
+      }
+
       // Report
       if (this.onStatsUpdate) {
         this.onStatsUpdate({
           time: Math.round(performance.now() - start),
           nodes: 0,
           success: !hit,
+          failureReason,
+          failureDetails,
+          isGreedy: true,
         })
       }
 
@@ -817,7 +843,7 @@ export class SceneController {
   ) {
     const start = performance.now()
 
-    const path = this.planner.plan(
+    const result = this.planner.plan(
       startAngles,
       this.targetMesh.position,
       effectiveParams
@@ -826,10 +852,11 @@ export class SceneController {
     console.log(
       `[SceneController] Planning finished in ${
         end - start
-      }ms. Success: ${!!path}`
+      }ms. Success: ${!!result.path}`,
+      result.failureReason ? `Reason: ${result.failureReason}` : ''
     )
 
-    if (!path) {
+    if (!result.path) {
       this.robot.setOverrideColor(0xff0000)
       setTimeout(() => {
         this.robot.setOverrideColor(null)
@@ -843,12 +870,15 @@ export class SceneController {
       this.onStatsUpdate({
         time: Math.round(end - start),
         nodes: this.planner.lastTrees.length,
-        success: !!path,
+        success: !!result.path,
+        failureReason: result.failureReason,
+        failureDetails: result.failureDetails,
+        isGreedy: false,
       })
     }
 
-    if (path) {
-      this.plannedPath = path
+    if (result.path) {
+      this.plannedPath = result.path
       this.pathIndex = 0
     }
   }

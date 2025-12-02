@@ -13,6 +13,20 @@ export interface RRTParams {
   algorithm?: 'standard' | 'connect'
 }
 
+// Failure reason types for detailed feedback
+export type FailureReason =
+  | 'timeout' // Iteration/time budget exhausted
+  | 'unreachable' // Target not reachable (IK fails completely)
+  | 'goal_in_collision' // Goal configuration collides with obstacle
+  | 'self_collision' // Robot would collide with itself
+  | null // Success (no failure)
+
+export interface PlanResult {
+  path: number[][] | null
+  failureReason: FailureReason
+  failureDetails?: string // Optional human-readable details
+}
+
 export class RRTPlanner {
   private robot: Robot
   private obstacleBox: THREE.Box3
@@ -39,8 +53,26 @@ export class RRTPlanner {
       goalBias: 0.0,
       algorithm: 'connect',
     }
-  ): number[][] | null {
+  ): PlanResult {
     this.lastTrees = [] // Reset visualization
+
+    // --- STEP 0: CHECK IF TARGET IS EVEN REACHABLE ---
+    // Quick check: is the target within the robot's maximum reach?
+    const maxReach = this.robot.CONFIG.reduce((sum, cfg) => {
+      return sum + (cfg.visualLength || 0)
+    }, 0)
+    const targetDist = targetPos.length() // Distance from origin (robot base)
+    if (targetDist > maxReach * 0.95) {
+      // 95% of max reach as safety margin
+      console.warn('Target appears to be beyond robot reach')
+      return {
+        path: null,
+        failureReason: 'unreachable',
+        failureDetails: `Target distance (${targetDist.toFixed(
+          2
+        )}) exceeds robot reach (${maxReach.toFixed(2)})`,
+      }
+    }
 
     // --- STEP 1: FIND A VALID GOAL (Constraint Aware Inverse Kinematics) ---
     // this is important for the RRT-connect version which starts exploring path from the target position as well as from the start position of the tip.
@@ -53,6 +85,12 @@ export class RRTPlanner {
     // The planner needs to know: "Did the IK give me a perfect goal, or a broken one?"
     // If perfect: Great, we trust it fully.
     // If broken (colliding): We still use it as a rough guide ("Bias"), but we log a warning.
+
+    // Check for self-collision first
+    if (this.robot.checkSelfCollision(solution)) {
+      console.warn('IK solution results in self-collision')
+      // Still try to plan, but note this for potential failure
+    }
 
     if (!this.robot.checkCollision(solution, this.obstacleBox)) {
       goalAngles = solution
@@ -88,7 +126,12 @@ export class RRTPlanner {
         console.warn(
           'Could not find valid neighbor. RRT-Connect might fail or be invalid.'
         )
-        return null
+        return {
+          path: null,
+          failureReason: 'goal_in_collision',
+          failureDetails:
+            'Target position requires a configuration that collides with obstacles. Try moving the target.',
+        }
       }
     }
 
@@ -149,20 +192,21 @@ export class RRTPlanner {
     goalAngles: number[],
     targetPos: THREE.Vector3,
     params: RRTParams
-  ): number[][] | null {
+  ): PlanResult {
     const { stepSize, maxIter, goalBias } = params
     const limits = this.robot.getLimits()
     const tree: Node[] = [{ angles: startAngles, parent: null }]
     this.lastTrees = tree
 
     const startTime = performance.now()
+    let timedOut = false
 
     for (let i = 0; i < maxIter; i++) {
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('Standard RRT Timeout')
         this.lastTrees = tree
-        // Return null to indicate failure, but tree is preserved in this.lastTrees
-        return null
+        timedOut = true
+        break
       }
 
       // 1. Sample
@@ -189,18 +233,38 @@ export class RRTPlanner {
         if (tipPos.distanceTo(targetPos) < 0.2) {
           console.log(`Standard RRT Success after ${i} nodes`)
           const path = this.getPathFromRoot(newNode)
-          return path.reverse()
+          return {
+            path: path.reverse(),
+            failureReason: null,
+          }
         }
       }
     }
-    return null
+
+    // Planning failed - determine reason
+    this.lastTrees = tree
+
+    if (timedOut) {
+      return {
+        path: null,
+        failureReason: 'timeout',
+        failureDetails: `Time limit (${this.TIME_LIMIT_MS}ms) exceeded. Try increasing step size or max iterations.`,
+      }
+    }
+
+    // Max iterations reached without timeout
+    return {
+      path: null,
+      failureReason: 'timeout',
+      failureDetails: `Max iterations (${maxIter}) reached. Try increasing iterations or adjusting parameters.`,
+    }
   }
 
   private planConnect(
     startAngles: number[],
     goalAngles: number[],
     params: RRTParams
-  ): number[][] | null {
+  ): PlanResult {
     const { stepSize, maxIter, goalBias } = params
     const limits = this.robot.getLimits()
 
@@ -212,13 +276,15 @@ export class RRTPlanner {
     let treeB = goalTree
 
     const startTime = performance.now()
+    let timedOut = false
 
     for (let i = 0; i < maxIter; i++) {
       // Because this is an algorithm with potentially a very large number of iterations, we need to limit the time it can run for.
       if (performance.now() - startTime > this.TIME_LIMIT_MS) {
         console.warn('RRT-Connect Timeout')
         this.lastTrees = [...startTree, ...goalTree] // Visualize partial trees
-        return null
+        timedOut = true
+        break
       }
 
       // 1. We take a random point to extend the tree towards just like in standard RTT see planStandard function
@@ -268,7 +334,10 @@ export class RRTPlanner {
           // pathB started at Goal, so it's likely already there, but let's be safe
           if (goalAngles) finalPath.push(goalAngles)
 
-          return finalPath
+          return {
+            path: finalPath,
+            failureReason: null,
+          }
         }
       }
 
@@ -280,7 +349,22 @@ export class RRTPlanner {
 
     // Visual debugging (Show both trees)
     this.lastTrees = [...startTree, ...goalTree]
-    return null
+
+    // Planning failed - determine reason
+    if (timedOut) {
+      return {
+        path: null,
+        failureReason: 'timeout',
+        failureDetails: `Time limit (${this.TIME_LIMIT_MS}ms) exceeded. Try increasing step size or max iterations.`,
+      }
+    }
+
+    // Max iterations reached without timeout
+    return {
+      path: null,
+      failureReason: 'timeout',
+      failureDetails: `Max iterations (${maxIter}) reached. Try increasing iterations or adjusting parameters.`,
+    }
   }
 
   // Tries to extend the tree towards a point.

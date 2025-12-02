@@ -1,6 +1,100 @@
 import { useEffect, useRef, useState } from 'react'
 import { SceneController, type PlannerStats } from './logic/SceneController'
+import type { FailureReason } from './logic/RRTPlanner'
 import './App.css'
+
+// Maps failure reasons to user-friendly messages and suggestions
+function getFailureFeedback(
+  reason: FailureReason,
+  isGreedy?: boolean
+): { message: string; suggestions: string[] } | null {
+  if (!reason) return null
+
+  if (isGreedy) {
+    // Special handling for Greedy IK failures
+    if (reason === 'goal_in_collision') {
+      return {
+        message: 'Direct path blocked by obstacle',
+        suggestions: [
+          'Move the target to a clear position',
+          'Use RRT planner (Step 2+) to find alternate paths',
+        ],
+      }
+    }
+    if (reason === 'self_collision') {
+      return {
+        message: 'Robot would collide with itself',
+        suggestions: [
+          'Move target to a less extreme position',
+          'Try removing a joint for simpler kinematics',
+        ],
+      }
+    }
+  }
+
+  switch (reason) {
+    case 'timeout':
+      return {
+        message: 'Iteration budget exhausted',
+        suggestions: [
+          'Increase Max Iterations',
+          'Increase Step Size for faster exploration',
+          'Increase Goal Bias to focus search',
+        ],
+      }
+    case 'unreachable':
+      return {
+        message: 'Target appears unreachable',
+        suggestions: [
+          'Move target closer to robot base',
+          'Add more joints for extended reach',
+        ],
+      }
+    case 'goal_in_collision':
+      return {
+        message: 'Target position inside obstacle',
+        suggestions: [
+          'Move target away from the obstacle',
+          'Lower the obstacle height',
+        ],
+      }
+    case 'self_collision':
+      return {
+        message: 'Path causes robot self-collision',
+        suggestions: [
+          'Move target to a less constrained position',
+          'Remove joints for simpler arm geometry',
+        ],
+      }
+    default:
+      return null
+  }
+}
+
+// Parameter presets for quick tuning
+const RRT_PRESETS = {
+  weak: {
+    stepSize: 0.05,
+    maxIter: 5000,
+    goalBias: 0.0,
+    label: 'Weak',
+    description: 'Tutorial defaults - likely to fail',
+  },
+  balanced: {
+    stepSize: 0.1,
+    maxIter: 7000,
+    goalBias: 0.1,
+    label: 'Balanced',
+    description: 'Good balance of speed and thoroughness',
+  },
+  strong: {
+    stepSize: 0.2,
+    maxIter: 10000,
+    goalBias: 0.15,
+    label: 'Strong',
+    description: 'Higher success rate for hard problems',
+  },
+} as const
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -32,10 +126,11 @@ function App() {
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0)
 
   // RRT Parameters
+  // Initial params match the "Weak" preset (tutorial mode default)
   const [rrtParams, setRrtParams] = useState({
-    stepSize: 0.2,
+    stepSize: 0.05,
     maxIter: 5000,
-    goalBias: 0.1,
+    goalBias: 0.0,
   })
 
   // 1. Initialize Scene
@@ -422,6 +517,33 @@ function App() {
                 <p className="hint">
                   Parameters are set to "Weak" defaults. Tune them!
                 </p>
+
+                {/* Preset Buttons */}
+                <div className="preset-buttons">
+                  {Object.entries(RRT_PRESETS).map(([key, preset]) => (
+                    <button
+                      key={key}
+                      className={`preset-btn ${
+                        rrtParams.stepSize === preset.stepSize &&
+                        rrtParams.maxIter === preset.maxIter &&
+                        rrtParams.goalBias === preset.goalBias
+                          ? 'active'
+                          : ''
+                      }`}
+                      onClick={() =>
+                        setRrtParams({
+                          stepSize: preset.stepSize,
+                          maxIter: preset.maxIter,
+                          goalBias: preset.goalBias,
+                        })
+                      }
+                      title={preset.description}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="parameter-control">
                   <label>Step Size (Growth Rate): {rrtParams.stepSize}</label>
                   <input
@@ -673,6 +795,33 @@ function App() {
 
               <div className="controls-section">
                 <h3>Algorithm Parameters</h3>
+
+                {/* Preset Buttons */}
+                <div className="preset-buttons">
+                  {Object.entries(RRT_PRESETS).map(([key, preset]) => (
+                    <button
+                      key={key}
+                      className={`preset-btn ${
+                        rrtParams.stepSize === preset.stepSize &&
+                        rrtParams.maxIter === preset.maxIter &&
+                        rrtParams.goalBias === preset.goalBias
+                          ? 'active'
+                          : ''
+                      }`}
+                      onClick={() =>
+                        setRrtParams({
+                          stepSize: preset.stepSize,
+                          maxIter: preset.maxIter,
+                          goalBias: preset.goalBias,
+                        })
+                      }
+                      title={preset.description}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="parameter-control">
                   <label>Step Size (Growth Rate): {rrtParams.stepSize}</label>
                   <input
@@ -930,27 +1079,6 @@ function App() {
             </div>
           </div>
 
-          {step >= 2 && stats && (
-            <div className="stat-card fade-in">
-              <div className="stat-row">
-                <span className="label">Status</span>
-                <span
-                  className={`value ${stats.success ? 'success' : 'pending'}`}
-                >
-                  {stats.success ? 'CONVERGED' : 'PLANNING'}
-                </span>
-              </div>
-              <div className="stat-row">
-                <span className="label">Time</span>
-                <span className="value">{stats.time} ms</span>
-              </div>
-              <div className="stat-row">
-                <span className="label">Nodes</span>
-                <span className="value">{stats.nodes}</span>
-              </div>
-            </div>
-          )}
-
           <div className="debug-section">
             <label className="toggle-row">
               <input
@@ -963,6 +1091,65 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Status Bar - Horizontal bar at bottom showing stats and failure feedback */}
+      {((step === 1 && stats && !stats.success) || step >= 2) && stats && (
+        <div className="status-bar fade-in">
+          {/* Stats Section */}
+          <div className="status-bar-stats">
+            <div className="status-item">
+              <span className="status-label">Status</span>
+              <span
+                className={`status-value ${
+                  stats.success ? 'success' : 'error'
+                }`}
+              >
+                {stats.success
+                  ? 'CONVERGED'
+                  : stats.time > 0
+                  ? 'FAILED'
+                  : 'PLANNING'}
+              </span>
+            </div>
+            {step >= 2 && (
+              <>
+                <div className="status-item">
+                  <span className="status-label">Time</span>
+                  <span className="status-value">{stats.time} ms</span>
+                </div>
+                <div className="status-item">
+                  <span className="status-label">Nodes</span>
+                  <span className="status-value">{stats.nodes}</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Failure Feedback Section */}
+          {!stats.success && stats.failureReason && (
+            <div className="status-bar-feedback">
+              <div className="feedback-reason">
+                <span className="feedback-icon">!</span>
+                <span className="feedback-message">
+                  {getFailureFeedback(stats.failureReason, stats.isGreedy)
+                    ?.message || 'Planning failed'}
+                </span>
+              </div>
+              <div className="feedback-suggestions">
+                <span className="suggestions-label">Try:</span>
+                {getFailureFeedback(
+                  stats.failureReason,
+                  stats.isGreedy
+                )?.suggestions.map((s, i) => (
+                  <span key={i} className="suggestion-chip">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="controls-help fade-in">
         <span>
