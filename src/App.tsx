@@ -374,7 +374,7 @@ function App() {
                   We'll start with a simplistic approach "The Greedy Approach"
                   and see a case where it fails. Then we'll explore RRT or
                   Rapidly-exploring Random Tree and its more efficient variant
-                  RRT-Connect)
+                  RRT-Connect
                 </p>
               </div>
 
@@ -382,7 +382,7 @@ function App() {
                 className="primary-btn"
                 onClick={() => handleStepChange(1)}
               >
-                Start Learning &rarr;
+                Start &rarr;
               </button>
             </div>
           )}
@@ -394,8 +394,8 @@ function App() {
                 <p className="placeholder-text">
                   <br />
                   This uses Cyclic Coordinate Descent algorithm. It is as if
-                  each joint in the robot arm, "looks" at the current position
-                  of the tip of the robot and the target position and decides to
+                  each joint in the robot arm "looks" at the current position of
+                  the tip of the robot and the target position and decides to
                   rotate itself to minimize that distance.
                   <br />
                   <br />
@@ -403,6 +403,28 @@ function App() {
                   adjustment at each joint, we get closer and closer. In low
                   complexity cases, the end point reaches the target.
                 </p>
+                <br />
+                <div className="controls-section">
+                  <button
+                    className="secondary-btn"
+                    onClick={() => {
+                      controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
+                    }}
+                    style={{ marginTop: '10px' }}
+                  >
+                    Move Target Behind Wall
+                  </button>
+                </div>
+                <br />
+                <div className="callout-box notice">
+                  <strong>What to Notice</strong>
+                  <p>
+                    Watch how the robot moves directly toward the target. When
+                    the wall is in the way, it gets stuck - it can't "plan
+                    ahead" to go around. Note: the robot turns red when it is
+                    within a safety margin of an obstacle.
+                  </p>
+                </div>
 
                 <h3 style={{ marginTop: '2rem', fontSize: '1.25rem' }}>
                   Why it Fails
@@ -414,27 +436,6 @@ function App() {
                   sometimes you need to move *away* from the target (or around a
                   wall) to eventually reach it.
                 </p>
-              </div>
-
-              <div className="callout-box notice">
-                <strong>What to Notice</strong>
-                <p>
-                  Watch how the robot moves directly toward the target. When the
-                  wall is in the way, it gets stuck - it can't "plan ahead" to
-                  go around.
-                </p>
-              </div>
-
-              <div className="controls-section">
-                <button
-                  className="secondary-btn"
-                  onClick={() => {
-                    controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
-                  }}
-                  style={{ marginTop: '10px' }}
-                >
-                  Move Target Behind Wall
-                </button>
               </div>
 
               <div className="callout-box action">
@@ -460,34 +461,52 @@ function App() {
           {step === 2 && (
             <div className="step-content fade-in">
               <h1>2. Standard RRT</h1>
-              <p className="subtitle">Single Tree Random Exploration</p>
+              <p className="subtitle">Rapidly exploring Random Tree </p>
 
               <div className="explanation">
                 <p>
-                  This algorithm grows a "Tree" of valid movements—essentially a
-                  map of safe places the robot has visited. It starts by picking
-                  a random joint configuration somewhere in the room. Then, it
-                  looks at its existing map (the tree) and finds the spot
-                  closest to that random point. From there, it grows a single
-                  small "twig" toward the random target. If this new step
-                  doesn't hit a wall, it's added to the map. In the next
-                  iteration, it picks a brand new random target and repeats the
-                  process, slowly building a bushy web of safe paths until one
-                  of them touches the goal.
+                  This algorithm grows a "Tree" of valid movements: essentially
+                  a map of safe places the robot has visited. It starts by
+                  picking a random joint configuration somewhere in the room.
+                  Then, it looks at its existing map (the tree) and finds the
+                  spot closest to that random point. From there, it grows a
+                  single small "twig" toward the random target. <br /> <br /> If
+                  this new step doesn't hit a wall, it's added to the map. In
+                  the next iteration, it picks a brand new random target and
+                  repeats the process, slowly building a bushy web of safe paths
+                  until one of them touches the goal.
                   <br />
                   <br />
-                  <b>Try it:</b> Click "Run Planner".
+                  <div className="callout-box action">
+                    <strong>Try This Next</strong>
+                    <p>Click "Run Planner".</p>
+                  </div>
                   <br />
-                  Notice how "bushy" the tree is? It explores everywhere! But
-                  for this "Behind the Wall" target, it will likely{' '}
-                  <b>
-                    FAIL (the robot tip will not move to the target position)
-                  </b>{' '}
-                  or time out. This is because this algorithm search a little
-                  all over the place (since it picks points to extend toward
-                  randomly).
+                  <div className="callout-box notice">
+                    <strong>What to Notice</strong>
+                    <p>
+                      See how the tree grows in all directions? This "bushy"
+                      exploration is thorough but slow. But for this "Behind the
+                      Wall" target, it will likely{' '}
+                      <b>
+                        FAIL (the robot tip will not move to the target
+                        position)
+                      </b>{' '}
+                      or time out. This is because this algorithm search a
+                      little all over the place (since it picks points to extend
+                      toward randomly).
+                    </p>
+                  </div>
                   <br />
-                  <br />
+                  <div className="callout-box action">
+                    <strong>
+                      If it Fails to hit the target, try this next
+                    </strong>
+                    <p>
+                      Increase Step Size and Max Iterations. Can you get it to
+                      find the target? Notice how many nodes it needs.
+                    </p>
+                  </div>
                   <b>Parameter Guide:</b>
                   <br />- <b>Step Size:</b> How far the robot reaches in each
                   step. Larger steps jump gaps but might hit walls.
@@ -495,12 +514,15 @@ function App() {
                   attempts = higher chance of success but slower.
                   <br />
                   <br />
-                  <b>Still Failing?</b> If after setting all parameters to the
-                  most favorable positions, it still doesn't find the target,
-                  this means the configuration is very difficult given the angle
-                  constraints.
+                  <b>Still Failing?</b> If after tuning parameters it still
+                  fails, Standard RRT's uniform random exploration may not be
+                  reaching the right regions of space within the time limit. The
+                  algorithm explores everywhere equally rather than focusing
+                  toward the goal.
                   <br />
-                  Try adding a <b>Joint</b> (on the right hand side).
+                  Try adding a <b>Joint</b> (on the right hand side) as a final
+                  measure. Adding another degree of freedom gives the robot more
+                  ways to bend around the obstacle.
                 </p>
               </div>
 
@@ -572,14 +594,6 @@ function App() {
                 </div>
               </div>
 
-              <div className="callout-box action">
-                <strong>Try This Next</strong>
-                <p>
-                  Increase Step Size and Max Iterations. Can you get it to find
-                  the target? Notice how many nodes it needs.
-                </p>
-              </div>
-
               <div
                 className="nav-buttons"
                 style={{ flexDirection: 'column', gap: '0.5rem' }}
@@ -639,30 +653,27 @@ function App() {
               <div className="explanation">
                 <h3>Meeting in the Middle</h3>
                 <p>
-                  Standard RRT might struggle to find the target if it
-                  relatively far and in a complex position (behind obstacle).
-                  It's also inneficient. Bi directional RRT connect is a
-                  solution.
+                  Bi directional RRT connect is a more efficient algorithm than
+                  standard RRT.
                   <br />
                   <br />
-                  The algo grows <b>two trees</b>: one from start, one from
-                  goal. They aggressively try to meet in the middle.
+                  The algo grows <b>two trees</b>: one from the start, one from
+                  the goal. They aggressively try to meet in the middle.
                   <br />
                   <br />
                   Each tree takes turn. One takes a step toward a random point
                   and the other one "looks" at where the new extension is and
-                  tried to extend its nearest node to it. then the swap roles
+                  tried to extend its nearest node to it. Next, they swap roles
                   and redo the same process.
                   <br />
                   <br />
                   <b>
-                    This random step and connect in turn might seem like it'S
-                    going to be chaotic but it is actually very efficient.
+                    This random turn by turn step and connect interplay might
+                    seem like it's going to be chaotic but it is actually very
+                    efficient.
                   </b>
                   <br />
                   <br />
-                  It's much more efficient, often finding a path where Standard
-                  RRT fails completely.
                 </p>
 
                 <div className="callout-box action">

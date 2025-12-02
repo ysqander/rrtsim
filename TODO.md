@@ -30,6 +30,7 @@ Offer optional “path smoothing” visualization (short-cutting) to contrast ra
 Scaffolded exercises
 End each step with a micro-challenge: “Make Greedy fail”, “Tune goalBias to reduce nodes by 30%”, “Find a case where Standard fails but Connect succeeds.”
 Add a 2–3 question mini-quiz per step to check understanding.
+
 Robustness and stress-test guardrails
 Unreachable target detection up-front
 Quick geometry check before planning (e.g., target beyond total link length or inside a minimum reach envelope) with a clear message and suggested actions.
