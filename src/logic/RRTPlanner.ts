@@ -15,15 +15,19 @@ export interface RRTParams {
 
 export class RRTPlanner {
   private robot: Robot
-  private obstacle: THREE.Mesh
+  private obstacleBox: THREE.Box3
   private TIME_LIMIT_MS = 3000 // Increased to 3 seconds for complex queries
 
   // Visualization helper
   public lastTrees: Node[] = []
 
-  constructor(robot: Robot, obstacle: THREE.Mesh) {
+  // Accept either a Mesh (main thread) or Box3 directly (worker)
+  constructor(robot: Robot, obstacle: THREE.Mesh | THREE.Box3) {
     this.robot = robot
-    this.obstacle = obstacle
+    this.obstacleBox =
+      obstacle instanceof THREE.Box3
+        ? obstacle
+        : new THREE.Box3().setFromObject(obstacle)
   }
 
   public plan(
@@ -43,14 +47,14 @@ export class RRTPlanner {
 
     let goalAngles: number[] | null = null
 
-    const solution = this.robot.solveRobustIK(targetPos, this.obstacle)
+    const solution = this.robot.solveRobustIK(targetPos, this.obstacleBox)
 
     // this step checks for collisions based on the angles given by solveRobustIK
     // The planner needs to know: "Did the IK give me a perfect goal, or a broken one?"
     // If perfect: Great, we trust it fully.
     // If broken (colliding): We still use it as a rough guide ("Bias"), but we log a warning.
 
-    if (!this.robot.checkCollision(solution, this.obstacle)) {
+    if (!this.robot.checkCollision(solution, this.obstacleBox)) {
       goalAngles = solution
       console.log('Found valid goal config.')
     } else {
@@ -72,7 +76,7 @@ export class RRTPlanner {
 
     // CRITICAL: RRT-Connect REQUIRES a valid goal configuration.
     // If the exact IK solution is in collision, try to find a valid configuration nearby.
-    if (this.robot.checkCollision(goalAngles, this.obstacle)) {
+    if (this.robot.checkCollision(goalAngles, this.obstacleBox)) {
       console.warn(
         'Goal in collision. Searching for valid neighbor for RRT-Connect...'
       )
@@ -104,7 +108,7 @@ export class RRTPlanner {
       const candidate = angles.map(
         (a) => a + (Math.random() * range * 2 - range)
       )
-      if (!this.robot.checkCollision(candidate, this.obstacle)) {
+      if (!this.robot.checkCollision(candidate, this.obstacleBox)) {
         return candidate
       }
     }
@@ -124,7 +128,7 @@ export class RRTPlanner {
 
     // If distance is very small, just check the endpoint (optimization)
     if (dist < RESOLUTION) {
-      return !this.robot.checkCollision(to, this.obstacle)
+      return !this.robot.checkCollision(to, this.obstacleBox)
     }
 
     const steps = Math.ceil(dist / RESOLUTION)
@@ -133,7 +137,7 @@ export class RRTPlanner {
       const t = i / steps
       // Linear interpolation between joint angles
       const intermediate = from.map((val, idx) => val + (to[idx]! - val) * t)
-      if (this.robot.checkCollision(intermediate, this.obstacle)) {
+      if (this.robot.checkCollision(intermediate, this.obstacleBox)) {
         return false // Hit obstacle during transition
       }
     }

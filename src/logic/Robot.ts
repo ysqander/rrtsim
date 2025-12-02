@@ -3,7 +3,7 @@ import * as THREE from 'three'
 // The "DNA" of the robot.
 // Equivalent to a simplified URDF or DH Table.
 // This describes the relationship of each bone relative to its parent.
-interface LinkConfig {
+export interface LinkConfig {
   name: string
   type: 'fixed' | 'revolute' // Fixed = Base/EndEffector, Revolute = Moving Joint
   axis?: 'y' | 'z' // Axis of rotation
@@ -12,6 +12,64 @@ interface LinkConfig {
   color?: number // Visual color
   limit?: [number, number] // [Min, Max] angles in Radians
 }
+
+// Default robot configuration
+const DEFAULT_CONFIG: LinkConfig[] = [
+  {
+    name: 'Base',
+    type: 'fixed',
+    offset: [0, 0.25, 0],
+    visualLength: 0.5,
+    color: 0x333333,
+  },
+  // Waist: Full 360 allowed (-PI to PI)
+  {
+    name: 'Waist',
+    type: 'revolute',
+    axis: 'y',
+    offset: [0, 0.25, 0],
+    visualLength: 0.5,
+    color: 0x333333,
+    limit: [-3.14, 3.14],
+  },
+  // Shoulder: Can't bend through floor. -90 deg to +90 deg
+  {
+    name: 'Shoulder',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 0.5, 0],
+    visualLength: 1.5,
+    color: 0x3498db,
+    limit: [-1.5, 1.5],
+  },
+  // Elbow: 0 to 150 degrees
+  {
+    name: 'Elbow',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 1.5, 0],
+    visualLength: 1.5,
+    color: 0x3498db,
+    limit: [-0.1, 2.6],
+  },
+  // Wrist: -90 to +90
+  {
+    name: 'Wrist',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 1.5, 0],
+    visualLength: 1.0,
+    color: 0xe67e22,
+    limit: [-1.5, 1.5],
+  },
+  {
+    name: 'Tip',
+    type: 'fixed',
+    offset: [0, 1.0, 0],
+    visualLength: 0.2,
+    color: 0xffff00,
+  },
+]
 
 export class Robot {
   public sceneObject: THREE.Group
@@ -26,8 +84,8 @@ export class Robot {
   public readonly ARM_WIDTH = 0.3
   // private readonly COLLISION_MARGIN = 0.05 // Deprecated in favor of local effectiveMargin
 
-  // JOINT parameters
-  private CONFIG: LinkConfig[] = [
+  // JOINT parameters - public for serialization to worker
+  public CONFIG: LinkConfig[] = [
     {
       name: 'Base',
       type: 'fixed',
@@ -84,8 +142,11 @@ export class Robot {
     },
   ]
 
-  constructor() {
+  constructor(config?: LinkConfig[]) {
     this.sceneObject = new THREE.Group()
+    if (config) {
+      this.CONFIG = config
+    }
     this.initRobot()
   }
 
@@ -172,59 +233,8 @@ export class Robot {
   }
 
   public resetConfig() {
-    // Reset to default config
-    this.CONFIG = [
-      {
-        name: 'Base',
-        type: 'fixed',
-        offset: [0, 0.25, 0],
-        visualLength: 0.5,
-        color: 0x333333,
-      },
-      {
-        name: 'Waist',
-        type: 'revolute',
-        axis: 'y',
-        offset: [0, 0.25, 0],
-        visualLength: 0.5,
-        color: 0x333333,
-        limit: [-3.14, 3.14],
-      },
-      {
-        name: 'Shoulder',
-        type: 'revolute',
-        axis: 'z',
-        offset: [0, 0.5, 0],
-        visualLength: 1.5,
-        color: 0x3498db,
-        limit: [-1.5, 1.5],
-      },
-      {
-        name: 'Elbow',
-        type: 'revolute',
-        axis: 'z',
-        offset: [0, 1.5, 0],
-        visualLength: 1.5,
-        color: 0x3498db,
-        limit: [-0.1, 2.6],
-      },
-      {
-        name: 'Wrist',
-        type: 'revolute',
-        axis: 'z',
-        offset: [0, 1.5, 0],
-        visualLength: 1.0,
-        color: 0xe67e22,
-        limit: [-1.5, 1.5],
-      },
-      {
-        name: 'Tip',
-        type: 'fixed',
-        offset: [0, 1.0, 0],
-        visualLength: 0.2,
-        color: 0xffff00,
-      },
-    ]
+    // Reset to default config (deep copy to avoid mutation)
+    this.CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG))
     this.rebuild()
   }
 
@@ -428,9 +438,10 @@ export class Robot {
 
   // --- ROBUST IK SOLVER (CCD + Random Restarts) ---
   // Tries to find a solution that is also collision-free AND reaches the target
+  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker)
   public solveRobustIK(
     targetPos: THREE.Vector3,
-    obstacle: THREE.Mesh
+    obstacle: THREE.Mesh | THREE.Box3
   ): number[] {
     const limits = this.getLimits()
     const DISTANCE_THRESHOLD = 0.1 // Must be this close to be valid
@@ -482,11 +493,18 @@ export class Robot {
 
   // OPTIMIZED COLLISION CHECK
   // Uses Line Segment Sampling instead of Mesh Bounding Boxes
-  public checkCollision(angles: number[], obstacle: THREE.Mesh): boolean {
+  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker)
+  public checkCollision(
+    angles: number[],
+    obstacle: THREE.Mesh | THREE.Box3
+  ): boolean {
     // 1. Get the Obstacle's Box ONCE (Fast)
     // In a real app, cache this. Don't compute it every frame.
     // Since the wall doesn't move, we assume its World Matrix is up to date.
-    const obstacleBox = new THREE.Box3().setFromObject(obstacle)
+    const obstacleBox =
+      obstacle instanceof THREE.Box3
+        ? obstacle.clone()
+        : new THREE.Box3().setFromObject(obstacle)
 
     // Reset scalar expansion (no extra fatness, trust the spheres)
     obstacleBox.expandByScalar(0.01)

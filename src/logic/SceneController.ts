@@ -3,11 +3,18 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { Robot } from './Robot.ts'
 import { RRTPlanner, type RRTParams } from './RRTPlanner.ts'
+import type { WorkerInput, WorkerOutput } from './rrtWorker.ts'
 
 export type PlannerStats = {
   time: number
   nodes: number
   success: boolean
+}
+
+// Serialized tree node for visualization (from worker)
+interface SerializedNode {
+  angles: number[]
+  parentIndex: number | null
 }
 
 export class SceneController {
@@ -32,6 +39,10 @@ export class SceneController {
   private isPlaying = false
   private isAnimatingTree = false
   private collisionDebugGroup: THREE.Group
+
+  // Web Worker for RRT planning (keeps UI responsive)
+  private worker: Worker | null = null
+  private isWorkerPlanning = false
 
   private algorithm: 'greedy' | 'rrt' | 'rrt-standard' = 'rrt'
   private rrtParams: RRTParams = {
@@ -108,6 +119,14 @@ export class SceneController {
     this.scene.updateMatrixWorld() // Important for math
 
     this.planner = new RRTPlanner(this.robot, this.obstacle)
+
+    // Initialize Web Worker for RRT planning
+    this.worker = new Worker(new URL('./rrtWorker.ts', import.meta.url), {
+      type: 'module',
+    })
+    this.worker.onmessage = (e: MessageEvent<WorkerOutput>) => {
+      this.handleWorkerResult(e.data)
+    }
 
     // 3. Controls
     this.controls = new OrbitControls(this.camera, canvas)
@@ -253,6 +272,16 @@ export class SceneController {
     this.robot.resetConfig()
     this.ghostRobot.resetConfig()
     this.makeGhost(this.ghostRobot.sceneObject)
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
+  }
+
+  // Reset robot angles to home position (all zeros)
+  public resetRobotPosition() {
+    const zeros = new Array(this.robot.getDoF()).fill(0)
+    this.robot.setAngles(zeros)
+    this.ghostRobot.setAngles(zeros)
     if (this.algorithm === 'greedy') {
       this.runPlanner()
     }
@@ -412,6 +441,145 @@ export class SceneController {
     // No auto-run. User must click "Run Planner".
   }
 
+  // --- WORKER HELPERS ---
+
+  // Serialize obstacle bounding box for worker
+  private getObstacleBox(): {
+    min: [number, number, number]
+    max: [number, number, number]
+  } {
+    const box = new THREE.Box3().setFromObject(this.obstacle)
+    return {
+      min: [box.min.x, box.min.y, box.min.z],
+      max: [box.max.x, box.max.y, box.max.z],
+    }
+  }
+
+  // Handle results from the RRT worker
+  private handleWorkerResult(result: WorkerOutput) {
+    this.isWorkerPlanning = false
+
+    console.log(
+      `[SceneController] Worker finished in ${result.time}ms. Success: ${result.success}`
+    )
+
+    if (!result.success) {
+      // VISUAL FEEDBACK FOR FAILURE
+      this.robot.setOverrideColor(0xff0000)
+      setTimeout(() => {
+        this.robot.setOverrideColor(null)
+      }, 500)
+    }
+
+    // 1. Visualize Tree from serialized data
+    this.visualizeSearchTreeFromData(result.treeData)
+
+    // 2. Report Stats to React
+    if (this.onStatsUpdate) {
+      this.onStatsUpdate({
+        time: result.time,
+        nodes: result.treeData.length,
+        success: result.success,
+      })
+    }
+
+    // 3. Execute Path (DELAY UNTIL ANIMATION DONE)
+    if (result.path) {
+      this.plannedPath = result.path
+      this.pathIndex = 0
+    }
+  }
+
+  // Visualize tree from serialized worker data
+  private visualizeSearchTreeFromData(treeData: SerializedNode[]) {
+    // 1. CLEANUP: Remove old mesh
+    if (this.treeMesh) {
+      this.scene.remove(this.treeMesh)
+      this.treeMesh.geometry.dispose()
+      if (Array.isArray(this.treeMesh.material)) {
+        this.treeMesh.material.forEach((m) => m.dispose())
+      } else {
+        this.treeMesh.material.dispose()
+      }
+      this.treeMesh.children.forEach((c) => {
+        if (c instanceof THREE.Points) {
+          c.geometry.dispose()
+          if (Array.isArray(c.material)) {
+            c.material.forEach((m) => m.dispose())
+          } else {
+            c.material.dispose()
+          }
+        }
+      })
+      this.treeMesh = null
+    }
+
+    if (!treeData || treeData.length === 0) return
+
+    // 2. GENERATE LINES (The Branches)
+    const points: THREE.Vector3[] = []
+    const limit = Math.min(treeData.length, 20000)
+
+    for (let i = 0; i < limit; i++) {
+      const node = treeData[i]
+      if (!node || node.parentIndex === null) continue
+
+      const parentNode = treeData[node.parentIndex]
+      if (!parentNode) continue
+
+      // Calculate 3D position of the Tip for start and end of the branch
+      const startPos = this.robot.getTipPosition(parentNode.angles)
+      const endPos = this.robot.getTipPosition(node.angles)
+
+      if (isNaN(startPos.x) || isNaN(endPos.x)) continue
+
+      points.push(startPos)
+      points.push(endPos)
+    }
+
+    console.log(
+      `[SceneController] Visualizing Tree from worker: ${treeData.length} nodes, ${points.length} vertices`
+    )
+
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(points)
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0x55ff55,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+    })
+
+    this.treeMesh = new THREE.LineSegments(lineGeo, lineMat)
+    this.treeMesh.geometry.setDrawRange(0, 0) // Start hidden for animation
+
+    // 3. GENERATE POINTS (The Nodes)
+    if (treeData.length < 5000) {
+      const dotPoints: THREE.Vector3[] = []
+      for (let i = 0; i < limit; i++) {
+        const node = treeData[i]
+        if (node) {
+          dotPoints.push(this.robot.getTipPosition(node.angles))
+        }
+      }
+
+      const dotGeo = new THREE.BufferGeometry().setFromPoints(dotPoints)
+      const dotMat = new THREE.PointsMaterial({
+        color: 0xccffcc,
+        size: 0.04,
+        transparent: true,
+        opacity: 0.5,
+        sizeAttenuation: true,
+      })
+
+      const dots = new THREE.Points(dotGeo, dotMat)
+      dots.geometry.setDrawRange(0, 0)
+      this.treeMesh.add(dots)
+    }
+
+    this.scene.add(this.treeMesh)
+    this.isAnimatingTree = true
+  }
+
   // --- NEW: DEBUG TOGGLE ---
   // Visualize the raw math used in checkCollision
   public toggleCollisionDebug(visible: boolean) {
@@ -506,9 +674,7 @@ export class SceneController {
 
   public runPlanner() {
     console.log('[DEBUG] runPlanner called. Algorithm:', this.algorithm)
-    console.trace('[DEBUG] Stack trace:')
     console.log('Planning...')
-    const start = performance.now()
     const startAngles = this.robot.getCurrentAngles()
 
     // Clear old visual
@@ -519,7 +685,8 @@ export class SceneController {
     }
 
     if (this.algorithm === 'greedy') {
-      // The greedy approach
+      // The greedy approach (runs on main thread - fast enough)
+      const start = performance.now()
       const sol = this.robot.calculateIK(this.targetMesh.position)
       this.robot.setAngles(sol)
 
@@ -547,7 +714,14 @@ export class SceneController {
       return
     }
 
-    // If code does not enter the previous If block, then we are in RRT algo MODE
+    // --- RRT MODES: Use Web Worker to keep UI responsive ---
+
+    // Prevent multiple simultaneous planning requests
+    if (this.isWorkerPlanning) {
+      console.log('[SceneController] Worker already planning, ignoring request')
+      return
+    }
+
     // Ensure robot color is reset
     this.robot.setOverrideColor(null)
 
@@ -558,12 +732,52 @@ export class SceneController {
     }
 
     // LOGGING
-    console.log('[SceneController] Starting Plan:', {
+    console.log('[SceneController] Starting Plan via Worker:', {
       algorithm: this.algorithm,
       startAngles,
       targetPos: this.targetMesh.position,
       params: effectiveParams,
     })
+
+    // Send planning request to worker
+    if (this.worker) {
+      this.isWorkerPlanning = true
+
+      const workerInput: WorkerInput = {
+        startAngles,
+        targetPos: {
+          x: this.targetMesh.position.x,
+          y: this.targetMesh.position.y,
+          z: this.targetMesh.position.z,
+        },
+        params: effectiveParams,
+        robotConfig: this.robot.CONFIG,
+        obstacleBox: this.getObstacleBox(),
+      }
+
+      this.worker.postMessage(workerInput)
+
+      // Show "planning" state in UI
+      if (this.onStatsUpdate) {
+        this.onStatsUpdate({
+          time: 0,
+          nodes: 0,
+          success: false,
+        })
+      }
+    } else {
+      // Fallback to main thread if worker not available
+      console.warn('[SceneController] Worker not available, using main thread')
+      this.runPlannerMainThread(startAngles, effectiveParams)
+    }
+  }
+
+  // Fallback: Run planner on main thread (blocks UI)
+  private runPlannerMainThread(
+    startAngles: number[],
+    effectiveParams: RRTParams
+  ) {
+    const start = performance.now()
 
     const path = this.planner.plan(
       startAngles,
@@ -578,18 +792,15 @@ export class SceneController {
     )
 
     if (!path) {
-      // VISUAL FEEDBACK FOR FAILURE
-      // Flash the robot red quickly
       this.robot.setOverrideColor(0xff0000)
       setTimeout(() => {
         this.robot.setOverrideColor(null)
       }, 500)
     }
 
-    // 1. Visualize Tree
+    // Visualize Tree (using old method for main thread planner)
     this.visualizeSearchTree()
 
-    // 2. Report Stats to React
     if (this.onStatsUpdate) {
       this.onStatsUpdate({
         time: Math.round(end - start),
@@ -598,11 +809,9 @@ export class SceneController {
       })
     }
 
-    // 3. Execute Path (DELAY UNTIL ANIMATION DONE)
     if (path) {
       this.plannedPath = path
       this.pathIndex = 0
-      // this.isPlaying = true // Wait for animation to finish before playing
     }
   }
 
@@ -817,6 +1026,13 @@ export class SceneController {
         this.ghostTreeMesh.material.dispose()
       }
       this.ghostTreeMesh = null
+    }
+  }
+
+  // Toggle visibility of the ghost tree (Standard RRT comparison)
+  public setGhostTreeVisible(visible: boolean) {
+    if (this.ghostTreeMesh) {
+      this.ghostTreeMesh.visible = visible
     }
   }
 }

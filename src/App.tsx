@@ -19,6 +19,8 @@ function App() {
   const [tutorialMode, setTutorialMode] = useState(true)
   // Auto-Swivel: Automatically orbit camera after running planner (once, then auto-disables)
   const [autoSwivel, setAutoSwivel] = useState(true)
+  // Show comparison with Standard RRT in step 3 (requires running Std RRT first in step 2)
+  const [showComparison, setShowComparison] = useState(true)
 
   // Obstacle Height (Default 2.0)
   const [obstacleHeight, setObstacleHeight] = useState(2.0)
@@ -143,6 +145,9 @@ function App() {
       // Switching to RRT-Connect (The "Fast" Solution)
       controllerRef.current.setAlgorithm('rrt', true)
       controllerRef.current.setInteraction(true)
+
+      // Respect the comparison toggle for ghost tree visibility
+      controllerRef.current.setGhostTreeVisible(showComparison)
 
       if (tutorialMode) {
         // Apply WEAK defaults again to show improvement
@@ -512,12 +517,32 @@ function App() {
                   RRT fails completely.
                 </p>
 
-                {/* NEW: Comparison Dashboard */}
-                {standardStats && (
+                {/* Comparison Toggle */}
+                <label
+                  className="toggle-row"
+                  style={{ marginTop: '1rem', marginBottom: '0.5rem' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showComparison}
+                    onChange={(e) => {
+                      setShowComparison(e.target.checked)
+                      controllerRef.current?.setGhostTreeVisible(
+                        e.target.checked
+                      )
+                    }}
+                  />
+                  <span style={{ color: showComparison ? '#2ecc71' : '#aaa' }}>
+                    Show Comparison with Std RRT
+                  </span>
+                </label>
+
+                {/* Comparison Dashboard */}
+                {showComparison && standardStats && (
                   <div
                     className="comparison-card"
                     style={{
-                      marginTop: '1rem',
+                      marginTop: '0.5rem',
                       padding: '1rem',
                       background: 'rgba(0,0,0,0.2)',
                       borderRadius: '8px',
@@ -586,6 +611,21 @@ function App() {
                       RRT).
                     </p>
                   </div>
+                )}
+
+                {/* Hint when no comparison data */}
+                {showComparison && !standardStats && (
+                  <p
+                    style={{
+                      fontSize: '0.85rem',
+                      color: '#f1c40f',
+                      marginTop: '0.5rem',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    To see a comparison, first run Standard RRT in step 2, then
+                    return here.
+                  </p>
                 )}
               </div>
 
@@ -692,6 +732,12 @@ function App() {
               style={{ width: '100%', marginBottom: '0.5rem' }}
             >
               Reset Target Position
+            </button>
+            <button
+              onClick={() => controllerRef.current?.resetRobotPosition()}
+              style={{ width: '100%', marginBottom: '0.5rem' }}
+            >
+              Reset Robot Position
             </button>
           </div>
 
