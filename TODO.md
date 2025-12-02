@@ -1,2 +1,2 @@
 - What do the Hitboxes show at the moment. seems like gibberish.
-- Ru nthe calcs in "worker" to avoid crashing when people stress test it.
+- Run the calcs in "worker" to avoid crashing when people stress test it.

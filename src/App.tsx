@@ -215,6 +215,9 @@ function App() {
     setRrtParams((prev) => ({ ...prev, [key]: value }))
   }
 
+  // Gating helpers
+  const isInteractiveStep = step >= 1
+
   return (
     <div className="app-container">
       <canvas ref={canvasRef} className="webgl-canvas" />
@@ -318,6 +321,15 @@ function App() {
                 </p>
               </div>
 
+              <div className="callout-box notice">
+                <strong>What to Notice</strong>
+                <p>
+                  Watch how the robot moves directly toward the target. When the
+                  wall is in the way, it gets stuck - it can't "plan ahead" to
+                  go around.
+                </p>
+              </div>
+
               <div className="controls-section">
                 <button
                   className="secondary-btn"
@@ -328,6 +340,14 @@ function App() {
                 >
                   Move Target Behind Wall
                 </button>
+              </div>
+
+              <div className="callout-box action">
+                <strong>Try This Next</strong>
+                <p>
+                  Drag the target to different positions. Can you find spots
+                  where Greedy succeeds vs fails?
+                </p>
               </div>
 
               <div className="nav-buttons">
@@ -378,8 +398,6 @@ function App() {
                   step. Larger steps jump gaps but might hit walls.
                   <br />- <b>Iterations:</b> How many attempts to make. More
                   attempts = higher chance of success but slower.
-                  <br />- <b>Goal Bias:</b> How often it tries to go straight to
-                  the goal. Higher bias = faster but might get stuck.
                   <br />
                   <br />
                   <b>Still Failing?</b> If after setting all parameters to the
@@ -388,6 +406,15 @@ function App() {
                   constraints.
                   <br />
                   Try adding a <b>Joint</b> (on the right hand side).
+                </p>
+              </div>
+
+              <div className="callout-box notice">
+                <strong>What to Notice</strong>
+                <p>
+                  See how the tree grows in all directions? This "bushy"
+                  exploration is thorough but slow. With weak parameters, it
+                  often times out.
                 </p>
               </div>
 
@@ -421,19 +448,14 @@ function App() {
                     }
                   />
                 </div>
-                <div className="parameter-control">
-                  <label>Goal Bias: {rrtParams.goalBias}</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={rrtParams.goalBias}
-                    onChange={(e) =>
-                      handleParamChange('goalBias', parseFloat(e.target.value))
-                    }
-                  />
-                </div>
+              </div>
+
+              <div className="callout-box action">
+                <strong>Try This Next</strong>
+                <p>
+                  Increase Step Size and Max Iterations. Can you get it to find
+                  the target? Notice how many nodes it needs.
+                </p>
               </div>
 
               <div
@@ -516,13 +538,18 @@ function App() {
                     going to be chaotic but it is actually very efficient.
                   </b>
                   <br />
-                  <b>Action:</b> Even with the same "Weak" parameters, click
-                  "Run". Does it solve it? Or does it get closer?
-                  <br />
                   <br />
                   It's much more efficient, often finding a path where Standard
                   RRT fails completely.
                 </p>
+
+                <div className="callout-box action">
+                  <strong>Try This Next</strong>
+                  <p>
+                    Even with the same "Weak" parameters, click "Run". Does it
+                    solve it? Or does it get closer?
+                  </p>
+                </div>
 
                 {/* Comparison Toggle */}
                 <label
@@ -636,6 +663,14 @@ function App() {
                 )}
               </div>
 
+              <div className="callout-box notice">
+                <strong>What to Notice</strong>
+                <p>
+                  Two trees grow toward each other - much more directed! Compare
+                  the node count and time to Standard RRT.
+                </p>
+              </div>
+
               <div className="controls-section">
                 <h3>Algorithm Parameters</h3>
                 <div className="parameter-control">
@@ -664,6 +699,10 @@ function App() {
                     }
                   />
                 </div>
+                <p className="tiny-text" style={{ marginBottom: '0.3rem' }}>
+                  Goal Bias: How often it tries to go straight to the goal.
+                  Higher bias = faster but might get stuck.
+                </p>
                 <div className="parameter-control">
                   <label>Goal Bias: {rrtParams.goalBias}</label>
                   <input
@@ -701,8 +740,17 @@ function App() {
         <div className="dashboard-panel">
           <h3>Simulation Control</h3>
 
+          {/* Step 0 Gating Message */}
+          {!isInteractiveStep && (
+            <p className="gated-hint">Start the tutorial to unlock controls</p>
+          )}
+
           {/* Visual Settings Group */}
-          <div className="control-group">
+          <div
+            className={`control-group ${
+              !isInteractiveStep ? 'gated-control' : ''
+            }`}
+          >
             <h4>Visual Settings</h4>
 
             <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
@@ -748,7 +796,11 @@ function App() {
             </button>
           </div>
 
-          <div className="control-group">
+          <div
+            className={`control-group ${
+              !isInteractiveStep ? 'gated-control' : ''
+            }`}
+          >
             <h4>Scenario</h4>
             <div className="button-group">
               <button
@@ -789,7 +841,11 @@ function App() {
             </div>
           )}
 
-          <div className="control-group">
+          <div
+            className={`control-group ${
+              !isInteractiveStep ? 'gated-control' : ''
+            }`}
+          >
             <h4>Obstacle Height</h4>
             <div className="parameter-control">
               <input
@@ -814,7 +870,11 @@ function App() {
             </div>
           </div>
 
-          <div className="control-group">
+          <div
+            className={`control-group ${
+              !isInteractiveStep ? 'gated-control' : ''
+            }`}
+          >
             <h4>
               Robot{' '}
               <span

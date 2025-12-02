@@ -421,6 +421,9 @@ export class SceneController {
     // RESET COLOR: Clear any leftover collision color from Greedy step
     this.robot.setOverrideColor(null)
 
+    // Reset worker planning flag when switching algorithms to prevent stuck state
+    this.isWorkerPlanning = false
+
     // Clear trees when switching
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)

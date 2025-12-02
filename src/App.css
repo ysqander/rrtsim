@@ -257,3 +257,70 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
 .pulse-animation {
     animation: pulse-green 2s infinite;
 }
+
+/* Gated Controls (disabled state) */
+.gated-control {
+    opacity: 0.35;
+    pointer-events: none;
+    position: relative;
+}
+
+.gated-hint {
+    font-size: 0.7rem;
+    color: #f1c40f;
+    font-style: italic;
+    margin: 0 0 0.5rem 0;
+    padding: 0.4rem 0.6rem;
+    background: rgba(241, 196, 15, 0.1);
+    border-left: 2px solid #f1c40f;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Callout Boxes for Learning Scaffolding */
+.callout-box {
+    padding: 0.8rem;
+    border-radius: 6px;
+    margin: 0.5rem 0;
+}
+
+.callout-box strong {
+    display: block;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.4rem;
+}
+
+.callout-box p {
+    font-size: 0.8rem;
+    margin: 0;
+    line-height: 1.4;
+}
+
+/* Notice variant (blue - observations) */
+.callout-box.notice {
+    background: rgba(52, 152, 219, 0.15);
+    border-left: 3px solid #3498db;
+}
+
+.callout-box.notice strong {
+    color: #3498db;
+}
+
+.callout-box.notice p {
+    color: #b8d4e8;
+}
+
+/* Action variant (green - next steps) */
+.callout-box.action {
+    background: rgba(46, 204, 113, 0.15);
+    border-left: 3px solid #2ecc71;
+}
+
+.callout-box.action strong {
+    color: #2ecc71;
+}
+
+.callout-box.action p {
+    color: #b8e8c8;
+}
