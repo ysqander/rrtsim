@@ -82,7 +82,36 @@ export class Robot {
   // Constants for visual and collision
   public readonly JOINT_RADIUS = 0.4
   public readonly ARM_WIDTH = 0.3
-  // private readonly COLLISION_MARGIN = 0.05 // Deprecated in favor of local effectiveMargin
+
+  // ==========================================================================
+  // COLLISION DETECTION PARAMETERS
+  // ==========================================================================
+  // These constants control how collision detection works. We use DIFFERENT
+  // margins for obstacle vs self-collision because they serve different purposes:
+  //
+  // SAMPLES_PER_SEGMENT: More samples = more accurate but slower.
+  //   10 samples means we check every ~10% of each link segment.
+  //   Used for OBSTACLE collision only (self-collision uses analytic distance).
+  //
+  // OBSTACLE_COLLISION_MARGIN: Extra "padding" when checking against walls/obstacles.
+  //   0.15 provides a safe buffer to prevent clipping and near-misses with external
+  //   objects. We want the robot to stay well clear of obstacles.
+  //
+  // SELF_COLLISION_MARGIN: Smaller margin for checking if arm segments intersect.
+  //   0.02 is a small tolerance to account for numerical precision.
+  //   We use a SMALLER margin here because adjacent segments on the same robot
+  //   are naturally close together at joints. A larger margin would cause
+  //   false positives where valid configurations are rejected.
+  //
+  // SELF_COLLISION_TRIM: Fixed distance to trim from each segment endpoint
+  //   before checking self-collision. This prevents false positives near joints
+  //   where segments naturally meet. 0.15 units provides good clearance without
+  //   missing real collisions in the middle of segments.
+  // ==========================================================================
+  private readonly SAMPLES_PER_SEGMENT = 10
+  private readonly OBSTACLE_COLLISION_MARGIN = 0.15
+  private readonly SELF_COLLISION_MARGIN = 0.02
+  private readonly SELF_COLLISION_TRIM = 0.15
 
   // JOINT parameters - public for serialization to worker
   public CONFIG: LinkConfig[] = [
@@ -491,13 +520,230 @@ export class Robot {
     return matrices.map((m) => new THREE.Vector3().setFromMatrixPosition(m))
   }
 
-  // OPTIMIZED COLLISION CHECK
-  // Uses Line Segment Sampling instead of Mesh Bounding Boxes
-  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker)
+  /**
+   * Samples evenly-spaced points along a line segment.
+   *
+   * This is a shared helper used by both obstacle collision and self-collision
+   * detection. By using the same sampling for both, we ensure consistent behavior.
+   *
+   * @param start - Start point of the segment
+   * @param end - End point of the segment
+   * @returns Array of Vector3 points along the segment (including start and end)
+   */
+  private sampleSegmentPoints(
+    start: THREE.Vector3,
+    end: THREE.Vector3
+  ): THREE.Vector3[] {
+    const points: THREE.Vector3[] = []
+
+    for (let k = 0; k <= this.SAMPLES_PER_SEGMENT; k++) {
+      const t = k / this.SAMPLES_PER_SEGMENT
+      // Linear interpolation: point = start + t * (end - start)
+      points.push(new THREE.Vector3().lerpVectors(start, end, t))
+    }
+
+    return points
+  }
+
+  /**
+   * Returns the collision radius used for link segments when checking OBSTACLES.
+   * Uses the larger margin for safety buffer against external objects.
+   */
+  private getObstacleCollisionRadius(): number {
+    return this.ARM_WIDTH / 2 + this.OBSTACLE_COLLISION_MARGIN
+  }
+
+  /**
+   * Returns the collision radius used for joint spheres when checking OBSTACLES.
+   * Joints are larger than arm segments, so they get a bigger radius.
+   */
+  private getJointCollisionRadius(): number {
+    return this.JOINT_RADIUS + this.OBSTACLE_COLLISION_MARGIN
+  }
+
+  /**
+   * Returns the collision radius used for SELF-COLLISION detection.
+   * Uses a smaller margin because adjacent segments are naturally close at joints.
+   * We only want to detect actual geometric intersection, not "closeness".
+   */
+  private getSelfCollisionRadius(): number {
+    return this.ARM_WIDTH / 2 + this.SELF_COLLISION_MARGIN
+  }
+
+  // ==========================================================================
+  // SEGMENT-TO-SEGMENT DISTANCE (Analytic Approach)
+  // ==========================================================================
+  //
+  // Computes the minimum Euclidean distance between two 3D line segments.
+  // Based on the parametric approach from Ericson's "Real-Time Collision Detection".
+  //
+  // Each segment is defined by two endpoints:
+  //   Segment 1: p1 -> q1
+  //   Segment 2: p2 -> q2
+  //
+  // We parameterize each segment as:
+  //   S1(s) = p1 + s * (q1 - p1),  s in [0, 1]
+  //   S2(t) = p2 + t * (q2 - p2),  t in [0, 1]
+  //
+  // The algorithm finds the (s, t) pair that minimizes ||S1(s) - S2(t)||.
+  // ==========================================================================
+
+  /**
+   * Computes the closest distance between two 3D line segments.
+   *
+   * @param p1 - Start of segment 1
+   * @param q1 - End of segment 1
+   * @param p2 - Start of segment 2
+   * @param q2 - End of segment 2
+   * @returns The minimum distance between the two segments
+   */
+  private closestDistanceBetweenSegments(
+    p1: THREE.Vector3,
+    q1: THREE.Vector3,
+    p2: THREE.Vector3,
+    q2: THREE.Vector3
+  ): number {
+    // Direction vectors
+    const d1 = new THREE.Vector3().subVectors(q1, p1) // Segment 1 direction
+    const d2 = new THREE.Vector3().subVectors(q2, p2) // Segment 2 direction
+    const r = new THREE.Vector3().subVectors(p1, p2) // Vector from p2 to p1
+
+    const a = d1.dot(d1) // Squared length of segment 1
+    const e = d2.dot(d2) // Squared length of segment 2
+    const f = d2.dot(r)
+
+    const EPSILON = 1e-7
+
+    let s: number
+    let t: number
+
+    // Check if either or both segments degenerate into points
+    if (a <= EPSILON && e <= EPSILON) {
+      // Both segments are points
+      return p1.distanceTo(p2)
+    }
+
+    if (a <= EPSILON) {
+      // Segment 1 is a point
+      s = 0
+      t = Math.max(0, Math.min(1, f / e))
+    } else {
+      const c = d1.dot(r)
+      if (e <= EPSILON) {
+        // Segment 2 is a point
+        t = 0
+        s = Math.max(0, Math.min(1, -c / a))
+      } else {
+        // General case: neither segment is degenerate
+        const b = d1.dot(d2)
+        const denom = a * e - b * b // Always >= 0
+
+        // If segments are not parallel, compute closest point on line 1 to line 2
+        // and clamp to segment 1. Otherwise pick arbitrary s (here 0).
+        if (denom !== 0) {
+          s = Math.max(0, Math.min(1, (b * f - c * e) / denom))
+        } else {
+          s = 0
+        }
+
+        // Compute point on line 2 closest to S1(s)
+        t = (b * s + f) / e
+
+        // If t is outside [0,1], clamp and recompute s
+        if (t < 0) {
+          t = 0
+          s = Math.max(0, Math.min(1, -c / a))
+        } else if (t > 1) {
+          t = 1
+          s = Math.max(0, Math.min(1, (b - c) / a))
+        }
+      }
+    }
+
+    // Compute the closest points
+    const c1 = new THREE.Vector3().addVectors(p1, d1.clone().multiplyScalar(s))
+    const c2 = new THREE.Vector3().addVectors(p2, d2.clone().multiplyScalar(t))
+
+    return c1.distanceTo(c2)
+  }
+
+  // ==========================================================================
+  // SEGMENT TRIMMING HELPER
+  // ==========================================================================
+  //
+  // Shortens a line segment from both ends by a fixed amount.
+  // This is used to avoid false-positive self-collisions near joints, where
+  // adjacent segments naturally meet and would otherwise appear to "collide".
+  //
+  // If the trim amount would invert or collapse the segment (i.e., trim more
+  // than half the segment length from each end), we return the midpoint as
+  // both start and end (a degenerate zero-length segment).
+  // ==========================================================================
+
+  /**
+   * Trims a segment from both ends by a fixed amount.
+   *
+   * @param start - Original start point of the segment
+   * @param end - Original end point of the segment
+   * @param trimAmount - Distance to trim from each end
+   * @returns New trimmed segment { start, end }
+   */
+  private trimSegment(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    trimAmount: number
+  ): { start: THREE.Vector3; end: THREE.Vector3 } {
+    const length = start.distanceTo(end)
+
+    // If trimming would collapse or invert the segment, return midpoint
+    if (trimAmount * 2 >= length) {
+      const midpoint = new THREE.Vector3().lerpVectors(start, end, 0.5)
+      return { start: midpoint.clone(), end: midpoint.clone() }
+    }
+
+    // Calculate the trim ratio (how far along the segment to move each endpoint)
+    const trimRatio = trimAmount / length
+
+    // New start is moved inward from original start
+    const newStart = new THREE.Vector3().lerpVectors(start, end, trimRatio)
+    // New end is moved inward from original end
+    const newEnd = new THREE.Vector3().lerpVectors(start, end, 1 - trimRatio)
+
+    return { start: newStart, end: newEnd }
+  }
+
+  // ==========================================================================
+  // COMPLETE COLLISION CHECK (Obstacle + Self-Collision)
+  // ==========================================================================
+  //
+  // This method checks for TWO types of collisions:
+  //   1. OBSTACLE COLLISION: Robot hitting external objects (walls, boxes, etc.)
+  //   2. SELF-COLLISION: Robot's own arm segments intersecting each other
+  //
+  // Both checks are essential for valid motion planning. The RRT algorithm
+  // calls this method to validate each potential configuration.
+  //
+  // Uses Line Segment Sampling instead of Mesh Bounding Boxes for accuracy.
+  // Accepts either a Mesh (for main thread) or a Box3 directly (for worker).
+  // ==========================================================================
   public checkCollision(
     angles: number[],
     obstacle: THREE.Mesh | THREE.Box3
   ): boolean {
+    // ========================================
+    // PART 1: CHECK SELF-COLLISION FIRST
+    // ========================================
+    // This is especially important for robots with many joints, where the arm
+    // can bend back on itself. We check this first because it's independent
+    // of the obstacle and is often the cause of invalid configurations.
+    if (this.checkSelfCollision(angles)) {
+      return true // Self-collision detected - configuration is invalid
+    }
+
+    // ========================================
+    // PART 2: CHECK OBSTACLE COLLISION
+    // ========================================
+
     // 1. Get the Obstacle's Box ONCE (Fast)
     // In a real app, cache this. Don't compute it every frame.
     // Since the wall doesn't move, we assume its World Matrix is up to date.
@@ -514,16 +760,13 @@ export class Robot {
     // Note: These positions correspond 1-to-1 with the CONFIG array
     const joints = this.getJointPositions(angles)
 
-    // 3. Check Sampling Points along the bones
-    // We iterate through the CONFIG to find segments (where visualLength > 0)
-    const samplesPerLink = 10
-    // INCREASED MARGIN: To better match the visual debugging and avoid clipping
-    // Was 0.05, increasing to 0.15 to provide a safer buffer around the robot
-    const effectiveMargin = 0.15
-    const collisionRadius = this.ARM_WIDTH / 2 + effectiveMargin
-    const jointRadius = this.JOINT_RADIUS + effectiveMargin
+    // 3. Get collision radii for obstacle checking (uses larger safety margin)
+    const collisionRadius = this.getObstacleCollisionRadius()
+    const jointRadius = this.getJointCollisionRadius()
 
-    // FIX: Iterate 0 to length-1. Check CONFIG[i] mesh on segment i -> i+1
+    // 4. Check Sampling Points along the bones
+    // We iterate through the CONFIG to find segments (where visualLength > 0)
+    // Uses the shared sampleSegmentPoints() helper for consistent sampling
     for (let i = 0; i < joints.length - 1; i++) {
       // Only check segments that have visual length defined in the configuration
       if (this.CONFIG[i]?.visualLength) {
@@ -531,11 +774,11 @@ export class Robot {
         const end = joints[i + 1]
 
         if (start && end) {
-          for (let k = 0; k <= samplesPerLink; k++) {
-            const t = k / samplesPerLink
-            const point = new THREE.Vector3().lerpVectors(start, end, t)
-            const sphere = new THREE.Sphere(point, collisionRadius)
+          // Sample points along this segment using shared helper
+          const samplePoints = this.sampleSegmentPoints(start, end)
 
+          for (const point of samplePoints) {
+            const sphere = new THREE.Sphere(point, collisionRadius)
             if (obstacleBox.intersectsSphere(sphere)) {
               return true // HIT!
             }
@@ -544,10 +787,11 @@ export class Robot {
       }
     }
 
-    // 4. CHECK JOINT SPHERES DYNAMICALLY
+    // 5. CHECK JOINT SPHERES DYNAMICALLY
     // We iterate through CONFIG to find 'revolute' joints that have large hubs
     // FIX: Also check fixed joints if they have geometry (like Tip)
-    this.CONFIG.forEach((cfg, index) => {
+    for (let index = 0; index < this.CONFIG.length; index++) {
+      const cfg = this.CONFIG[index]!
       // Check revolute joints OR the Tip (last one)
       if (cfg.type === 'revolute' || index === this.CONFIG.length - 1) {
         const jointPos = joints[index]
@@ -558,8 +802,9 @@ export class Robot {
           }
         }
       }
-    })
+    }
 
+    // No collisions detected - configuration is valid
     return false
   }
 
@@ -572,5 +817,131 @@ export class Robot {
     // (Based on our CONFIG, the last entry is the Tip)
     const tipMatrix = chain[chain.length - 1]
     return new THREE.Vector3().setFromMatrixPosition(tipMatrix!)
+  }
+
+  // ==========================================================================
+  // SELF-COLLISION DETECTION
+  // ==========================================================================
+  //
+  // WHY IS THIS NEEDED?
+  // --------------------
+  // When a robot has multiple joints, it can bend into configurations where
+  // its own arm segments intersect each other. This is called "self-collision".
+  //
+  // For example, imagine a robot arm that bends back on itself - the forearm
+  // might pass through the upper arm. The RRT planner needs to detect and
+  // reject these invalid configurations.
+  //
+  // THE ALGORITHM (Analytic Segment Distance):
+  // ------------------------------------------
+  // We model each link segment as a "capsule" (a cylinder with rounded ends).
+  // To check if two capsules intersect, we:
+  //   1. Compute the minimum distance between the two segment centerlines
+  //      using an analytic formula (closestDistanceBetweenSegments)
+  //   2. If distance < 2 * collisionRadius, the capsules overlap
+  //
+  // JOINT PROXIMITY HANDLING:
+  // -------------------------
+  // Adjacent segments naturally meet at joints. To avoid false positives near
+  // these connection points, we TRIM each segment from both ends before checking.
+  // This effectively ignores the "joint region" where segments are expected to
+  // be close together.
+  //
+  // WHICH SEGMENTS TO CHECK:
+  // ------------------------
+  // We only check NON-ADJACENT segments. Adjacent segments (like the upper arm
+  // and forearm) naturally connect at a joint, so they will always "touch" there.
+  //
+  // If we have segments: [0-1], [1-2], [2-3], [3-4]
+  //   - Segment [0-1] checks against [2-3], [3-4] (skips adjacent [1-2])
+  //   - Segment [1-2] checks against [3-4] (skips adjacent [2-3])
+  //   - And so on...
+  //
+  // ==========================================================================
+
+  /**
+   * Checks if the robot is colliding with itself at a given configuration.
+   *
+   * This is essential for robots with many joints, where the arm can bend
+   * back on itself and cause segments to intersect.
+   *
+   * Uses analytic segment-to-segment distance calculation for accuracy,
+   * with endpoint trimming to handle natural joint proximity.
+   *
+   * @param angles - The joint angles to check (in radians)
+   * @returns true if there is a self-collision, false if configuration is valid
+   */
+  public checkSelfCollision(angles: number[]): boolean {
+    // Step 1: Get the 3D positions of all joints in the robot
+    // This gives us an array of Vector3 positions: [Base, Joint1, Joint2, ..., Tip]
+    const jointPositions = this.getJointPositions(angles)
+
+    // Step 2: Get self-collision radius (uses smaller margin than obstacle check)
+    // Two capsules collide when their centerlines are closer than 2 * radius
+    const collisionRadius = this.getSelfCollisionRadius()
+    const collisionThreshold = 2 * collisionRadius
+
+    // Step 3: Build a list of segments with their raw endpoints
+    // Each segment connects joint[i] to joint[i+1]
+    const segments: {
+      start: THREE.Vector3
+      end: THREE.Vector3
+      index: number
+    }[] = []
+
+    for (let i = 0; i < jointPositions.length - 1; i++) {
+      // Only include segments that have a visual representation
+      // (Some joints might just be rotation points without physical links)
+      if (this.CONFIG[i]?.visualLength && this.CONFIG[i]!.visualLength! > 0) {
+        const start = jointPositions[i]
+        const end = jointPositions[i + 1]
+        if (start && end) {
+          segments.push({ start, end, index: i })
+        }
+      }
+    }
+
+    // Step 4: Check each pair of NON-ADJACENT segments for intersection
+    // We iterate through all pairs where j > i + 1 (skipping adjacent segments)
+    for (let i = 0; i < segments.length; i++) {
+      for (let j = i + 2; j < segments.length; j++) {
+        // Why j = i + 2?
+        // - j = i would be the same segment (skip)
+        // - j = i + 1 is the adjacent segment that shares a joint (skip)
+        // - j = i + 2 and beyond are non-adjacent segments we need to check
+
+        const segA = segments[i]!
+        const segB = segments[j]!
+
+        // Trim both segments to avoid false positives near joints
+        // This shrinks each segment from both ends by SELF_COLLISION_TRIM
+        const trimmedA = this.trimSegment(
+          segA.start,
+          segA.end,
+          this.SELF_COLLISION_TRIM
+        )
+        const trimmedB = this.trimSegment(
+          segB.start,
+          segB.end,
+          this.SELF_COLLISION_TRIM
+        )
+
+        // Compute the minimum distance between the two trimmed segments
+        const dist = this.closestDistanceBetweenSegments(
+          trimmedA.start,
+          trimmedA.end,
+          trimmedB.start,
+          trimmedB.end
+        )
+
+        // If distance is less than the collision threshold, segments overlap
+        if (dist < collisionThreshold) {
+          return true // Self-collision detected!
+        }
+      }
+    }
+
+    // No self-collisions found - configuration is valid
+    return false
   }
 }

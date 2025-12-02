@@ -25,6 +25,9 @@ function App() {
   // Obstacle Height (Default 2.0)
   const [obstacleHeight, setObstacleHeight] = useState(2.0)
 
+  // Joint Count (displayed next to Robot section)
+  const [jointCount, setJointCount] = useState(4) // Default robot has 4 joints
+
   // 0: Intro, 1: Greedy IK, 2: Standard RRT, 3: RRT-Connect
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0)
 
@@ -50,6 +53,9 @@ function App() {
       // ACTUALLY: Let's update the callback in useEffect whenever step changes.
     }
     controller.onTargetMove = setTargetPos
+
+    // Get initial joint count
+    setJointCount(controller.getJointCount())
 
     // Initial Scenario
     controller.setScenario(scenario)
@@ -119,6 +125,7 @@ function App() {
         // FORCE RESET SCENE STATE for consistent "Failure" Demo
         // 1. Reset Joints
         controllerRef.current.resetJoints()
+        setJointCount(controllerRef.current.getJointCount())
         console.log('[DEBUG] resetJoints done')
         // 2. Reset Obstacle Height
         setObstacleHeight(2.0)
@@ -808,10 +815,26 @@ function App() {
           </div>
 
           <div className="control-group">
-            <h4>Robot</h4>
+            <h4>
+              Robot{' '}
+              <span
+                style={{
+                  fontSize: '0.85rem',
+                  color: '#888',
+                  fontWeight: 'normal',
+                }}
+              >
+                ({jointCount} joints)
+              </span>
+            </h4>
             <div className="button-group">
               <button
-                onClick={() => controllerRef.current?.addJoint()}
+                onClick={() => {
+                  controllerRef.current?.addJoint()
+                  if (controllerRef.current) {
+                    setJointCount(controllerRef.current.getJointCount())
+                  }
+                }}
                 style={
                   step === 2 && (!stats || !stats.success)
                     ? {
@@ -824,10 +847,24 @@ function App() {
               >
                 + Joint
               </button>
-              <button onClick={() => controllerRef.current?.removeJoint()}>
+              <button
+                onClick={() => {
+                  controllerRef.current?.removeJoint()
+                  if (controllerRef.current) {
+                    setJointCount(controllerRef.current.getJointCount())
+                  }
+                }}
+              >
                 - Joint
               </button>
-              <button onClick={() => controllerRef.current?.resetJoints()}>
+              <button
+                onClick={() => {
+                  controllerRef.current?.resetJoints()
+                  if (controllerRef.current) {
+                    setJointCount(controllerRef.current.getJointCount())
+                  }
+                }}
+              >
                 Reset
               </button>
             </div>

@@ -127,6 +127,25 @@ export class SceneController {
     this.worker.onmessage = (e: MessageEvent<WorkerOutput>) => {
       this.handleWorkerResult(e.data)
     }
+    // Handle worker errors (crashes, unhandled exceptions, etc.)
+    // This prevents the UI from getting stuck in "planning" state forever
+    this.worker.onerror = (e: ErrorEvent) => {
+      console.error('[SceneController] Worker error:', e.message)
+      this.isWorkerPlanning = false
+      // Notify UI of failure
+      if (this.onStatsUpdate) {
+        this.onStatsUpdate({
+          time: 0,
+          nodes: 0,
+          success: false,
+        })
+      }
+      // Visual feedback
+      this.robot.setOverrideColor(0xff0000)
+      setTimeout(() => {
+        this.robot.setOverrideColor(null)
+      }, 500)
+    }
 
     // 3. Controls
     this.controls = new OrbitControls(this.camera, canvas)
@@ -275,6 +294,14 @@ export class SceneController {
     if (this.algorithm === 'greedy') {
       this.runPlanner()
     }
+  }
+
+  /**
+   * Returns the number of moving joints (degrees of freedom) on the robot.
+   * Useful for displaying in the UI.
+   */
+  public getJointCount(): number {
+    return this.robot.getDoF()
   }
 
   // Reset robot angles to home position (all zeros)
@@ -459,6 +486,11 @@ export class SceneController {
   private handleWorkerResult(result: WorkerOutput) {
     this.isWorkerPlanning = false
 
+    // Log any errors from the worker
+    if (result.error) {
+      console.error(`[SceneController] Worker error: ${result.error}`)
+    }
+
     console.log(
       `[SceneController] Worker finished in ${result.time}ms. Success: ${result.success}`
     )
@@ -601,11 +633,14 @@ export class SceneController {
     ) as THREE.Vector3[]
 
     // The robot's physical thickness (matches Robot.ts)
-    const ARM_THICKNESS = 0.3
-    // Robot.ts uses JOINT_RADIUS(0.4) + MARGIN(0.05)
-    // Visualizing the full checked volume including margin
-    const COLLISION_RADIUS = ARM_THICKNESS / 2 + 2
-    const JOINT_RADIUS = 0.4 + 0.05
+    // These values should match the actual collision radii used in Robot.ts:
+    //   - Self-collision: ARM_WIDTH/2 + SELF_COLLISION_MARGIN = 0.15 + 0.02 = 0.17
+    //   - Obstacle collision: ARM_WIDTH/2 + OBSTACLE_COLLISION_MARGIN = 0.15 + 0.15 = 0.30
+    // We visualize the OBSTACLE collision radius (larger) for clarity
+    const ARM_WIDTH = this.robot.ARM_WIDTH // 0.3
+    const OBSTACLE_MARGIN = 0.15
+    const COLLISION_RADIUS = ARM_WIDTH / 2 + OBSTACLE_MARGIN // 0.30
+    const JOINT_RADIUS = this.robot.JOINT_RADIUS + OBSTACLE_MARGIN // 0.4 + 0.15 = 0.55
 
     // 1. DRAW CYLINDERS (Segments)
     // Matches the loop in Robot.ts: 0 to length-1
