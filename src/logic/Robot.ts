@@ -13,6 +13,12 @@ export interface LinkConfig {
   limit?: [number, number] // [Min, Max] angles in Radians
 }
 
+// Oriented Bounding Box for accurate rotated obstacle collision detection
+export type OBBObstacle = {
+  halfSize: [number, number, number] // half-widths in local box space
+  matrix: number[] // 16-length world matrix (row-major from Matrix4.toArray())
+}
+
 // Default robot configuration
 const DEFAULT_CONFIG: LinkConfig[] = [
   {
@@ -467,11 +473,19 @@ export class Robot {
 
   // --- ROBUST IK SOLVER (CCD + Random Restarts) ---
   // Tries to find a solution that is also collision-free AND reaches the target
-  // Accepts either a Mesh (for main thread), a Box3 directly (for worker), or an array of either
+  // Accepts Mesh, Box3, OBB, or arrays of any combination
   // Optional `random` parameter allows passing a seeded PRNG for deterministic behavior
   public solveRobustIK(
     targetPos: THREE.Vector3,
-    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>,
+    obstacle:
+      | THREE.Mesh
+      | THREE.Box3
+      | { halfSize: [number, number, number]; matrix: number[] }
+      | Array<
+          | THREE.Mesh
+          | THREE.Box3
+          | { halfSize: [number, number, number]; matrix: number[] }
+        >,
     random: () => number = Math.random
   ): number[] {
     const limits = this.getLimits()
@@ -559,9 +573,11 @@ export class Robot {
   /**
    * Returns the collision radius used for joint spheres when checking OBSTACLES.
    * Joints are larger than arm segments, so they get a bigger radius.
+   * Uses slightly less conservative margin for joints to fit through narrow gates
+   * while keeping link segment margin unchanged.
    */
   private getJointCollisionRadius(): number {
-    return this.JOINT_RADIUS + this.OBSTACLE_COLLISION_MARGIN
+    return this.JOINT_RADIUS + Math.min(0.1, this.OBSTACLE_COLLISION_MARGIN)
   }
 
   /**
@@ -571,6 +587,38 @@ export class Robot {
    */
   private getSelfCollisionRadius(): number {
     return this.ARM_WIDTH / 2 + this.SELF_COLLISION_MARGIN
+  }
+
+  /**
+   * Tests if a sphere intersects an Oriented Bounding Box (OBB).
+   * Transforms the sphere center to box-local space and performs AABB test there.
+   *
+   * @param centerWorld - Sphere center in world coordinates
+   * @param radius - Sphere radius
+   * @param obb - The oriented bounding box with halfSize and world matrix
+   * @returns true if there is intersection
+   */
+  private intersectsSphereOBB(
+    centerWorld: THREE.Vector3,
+    radius: number,
+    obb: { halfSize: [number, number, number]; matrix: number[] }
+  ): boolean {
+    const mat = new THREE.Matrix4().fromArray(obb.matrix)
+    const inv = new THREE.Matrix4().copy(mat).invert()
+
+    // Transform center to the box's local space
+    const cLocal = centerWorld.clone().applyMatrix4(inv)
+    const hs = obb.halfSize
+
+    // Closest point in the AABB (in local space)
+    const qx = Math.max(-hs[0], Math.min(hs[0], cLocal.x))
+    const qy = Math.max(-hs[1], Math.min(hs[1], cLocal.y))
+    const qz = Math.max(-hs[2], Math.min(hs[2], cLocal.z))
+
+    const dx = cLocal.x - qx
+    const dy = cLocal.y - qy
+    const dz = cLocal.z - qz
+    return dx * dx + dy * dy + dz * dz <= radius * radius
   }
 
   // ==========================================================================
@@ -727,18 +775,24 @@ export class Robot {
   // calls this method to validate each potential configuration.
   //
   // Uses Line Segment Sampling instead of Mesh Bounding Boxes for accuracy.
-  // Accepts either a Mesh (for main thread), a Box3 directly (for worker), or an array of either.
+  // Supports: Mesh, Box3 (AABB), OBBObstacle (oriented bounding box), or arrays of any.
+  // OBB support enables accurate collision detection for rotated obstacles.
   // ==========================================================================
   public checkCollision(
     angles: number[],
-    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
+    obstacle:
+      | THREE.Mesh
+      | THREE.Box3
+      | { halfSize: [number, number, number]; matrix: number[] }
+      | Array<
+          | THREE.Mesh
+          | THREE.Box3
+          | { halfSize: [number, number, number]; matrix: number[] }
+        >
   ): boolean {
     // ========================================
     // PART 1: CHECK SELF-COLLISION FIRST
     // ========================================
-    // This is especially important for robots with many joints, where the arm
-    // can bend back on itself. We check this first because it's independent
-    // of the obstacle and is often the cause of invalid configurations.
     if (this.checkSelfCollision(angles)) {
       return true // Self-collision detected - configuration is invalid
     }
@@ -747,47 +801,77 @@ export class Robot {
     // PART 2: CHECK OBSTACLE COLLISION
     // ========================================
 
-    // 1. Normalize to an array of Box3
-    const obstacleBoxes: THREE.Box3[] = Array.isArray(obstacle)
-      ? obstacle.map((o) =>
-          o instanceof THREE.Box3
-            ? o.clone()
-            : new THREE.Box3().setFromObject(o)
+    // Normalize obstacles into separate arrays for AABBs and OBBs
+    const asArray = Array.isArray(obstacle) ? obstacle : [obstacle]
+    const boxObstacles: THREE.Box3[] = []
+    const obbObstacles: {
+      halfSize: [number, number, number]
+      matrix: number[]
+    }[] = []
+
+    for (const o of asArray) {
+      // Check for Box3 (has min/max properties)
+      if (
+        o &&
+        typeof o === 'object' &&
+        'min' in o &&
+        'max' in o &&
+        (o as THREE.Box3).isBox3
+      ) {
+        const box = (o as THREE.Box3).clone()
+        box.expandByScalar(0.01)
+        boxObstacles.push(box)
+      }
+      // Check for OBB (has halfSize and matrix properties)
+      else if (o && typeof o === 'object' && 'halfSize' in o && 'matrix' in o) {
+        obbObstacles.push(
+          o as { halfSize: [number, number, number]; matrix: number[] }
         )
-      : [
-          obstacle instanceof THREE.Box3
-            ? obstacle.clone()
-            : new THREE.Box3().setFromObject(obstacle),
-        ]
+      }
+      // Check for Mesh (has isMesh property)
+      else if (o && typeof o === 'object' && (o as THREE.Mesh).isMesh) {
+        // Convert Mesh to OBB using its geometry and world matrix
+        const mesh = o as THREE.Mesh
+        const geom = mesh.geometry as THREE.BufferGeometry
+        if (!geom.boundingBox) geom.computeBoundingBox()
+        const bb = geom.boundingBox!
+        obbObstacles.push({
+          halfSize: [
+            (bb.max.x - bb.min.x) / 2,
+            (bb.max.y - bb.min.y) / 2,
+            (bb.max.z - bb.min.z) / 2,
+          ],
+          matrix: mesh.matrixWorld.toArray(),
+        })
+      }
+    }
 
-    // Reset scalar expansion (no extra fatness, trust the spheres)
-    obstacleBoxes.forEach((b) => b.expandByScalar(0.01))
-
-    // 2. Get Virtual Skeleton Positions (Pure Math, No Visual Updates)
-    // [Base, Waist, Shoulder, Elbow, Wrist, Tip]
-    // Note: These positions correspond 1-to-1 with the CONFIG array
+    // 2. Get Virtual Skeleton Positions
     const joints = this.getJointPositions(angles)
 
-    // 3. Get collision radii for obstacle checking (uses larger safety margin)
-    const collisionRadius = this.getObstacleCollisionRadius()
+    // 3. Get collision radii
+    const segRadius = this.getObstacleCollisionRadius()
     const jointRadius = this.getJointCollisionRadius()
 
     // 4. Check Sampling Points along the bones vs all obstacles
-    // We iterate through the CONFIG to find segments (where visualLength > 0)
-    // Uses the shared sampleSegmentPoints() helper for consistent sampling
     for (let i = 0; i < joints.length - 1; i++) {
-      // Only check segments that have visual length defined in the configuration
       if (this.CONFIG[i]?.visualLength) {
         const start = joints[i]
         const end = joints[i + 1]
 
         if (start && end) {
-          // Sample points along this segment using shared helper
           const samplePoints = this.sampleSegmentPoints(start, end)
 
           for (const point of samplePoints) {
-            const sphere = new THREE.Sphere(point, collisionRadius)
-            for (const box of obstacleBoxes) {
+            // Check against OBBs first (rotated obstacles)
+            for (const obb of obbObstacles) {
+              if (this.intersectsSphereOBB(point, segRadius, obb)) {
+                return true // HIT!
+              }
+            }
+            // Then check against AABBs
+            const sphere = new THREE.Sphere(point, segRadius)
+            for (const box of boxObstacles) {
               if (box.intersectsSphere(sphere)) {
                 return true // HIT!
               }
@@ -797,17 +881,21 @@ export class Robot {
       }
     }
 
-    // 5. CHECK JOINT SPHERES DYNAMICALLY vs all obstacles
-    // We iterate through CONFIG to find 'revolute' joints that have large hubs
-    // FIX: Also check fixed joints if they have geometry (like Tip)
+    // 5. CHECK JOINT SPHERES vs all obstacles
     for (let index = 0; index < this.CONFIG.length; index++) {
       const cfg = this.CONFIG[index]!
-      // Check revolute joints OR the Tip (last one)
       if (cfg.type === 'revolute' || index === this.CONFIG.length - 1) {
         const jointPos = joints[index]
         if (jointPos) {
+          // Check against OBBs first
+          for (const obb of obbObstacles) {
+            if (this.intersectsSphereOBB(jointPos, jointRadius, obb)) {
+              return true // HIT!
+            }
+          }
+          // Then check against AABBs
           const sphere = new THREE.Sphere(jointPos, jointRadius)
-          for (const box of obstacleBoxes) {
+          for (const box of boxObstacles) {
             if (box.intersectsSphere(sphere)) {
               return true // HIT!
             }

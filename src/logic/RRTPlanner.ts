@@ -43,28 +43,50 @@ export interface PlanResult {
 
 export class RRTPlanner {
   private robot: Robot
-  private obstacleBoxes: THREE.Box3[]
+  // Supports both Box3 (AABB) and OBB obstacles for accurate rotated collision
+  private obstacleBoxes: (
+    | THREE.Box3
+    | { halfSize: [number, number, number]; matrix: number[] }
+  )[]
   private TIME_LIMIT_MS = 3000 // Increased to 3 seconds for complex queries
   private random: () => number = Math.random // Default to Math.random, seeded in plan()
 
   // Visualization helper
   public lastTrees: Node[] = []
 
-  // Accept either a Mesh (main thread), Box3 directly (worker), or an array of either
+  // Accept Mesh, Box3, OBB, or arrays of any combination
   constructor(
     robot: Robot,
-    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
+    obstacle:
+      | THREE.Mesh
+      | THREE.Box3
+      | { halfSize: [number, number, number]; matrix: number[] }
+      | Array<
+          | THREE.Mesh
+          | THREE.Box3
+          | { halfSize: [number, number, number]; matrix: number[] }
+        >
   ) {
     this.robot = robot
-    this.obstacleBoxes = Array.isArray(obstacle)
-      ? obstacle.map((o) =>
-          o instanceof THREE.Box3 ? o : new THREE.Box3().setFromObject(o)
-        )
-      : [
-          obstacle instanceof THREE.Box3
-            ? obstacle
-            : new THREE.Box3().setFromObject(obstacle),
-        ]
+    const arr = Array.isArray(obstacle) ? obstacle : [obstacle]
+    // Normalize: keep Box3s and OBBs as-is; convert Mesh -> Box3
+    this.obstacleBoxes = arr.map((o) => {
+      // Check for Box3
+      if (
+        o &&
+        typeof o === 'object' &&
+        'isBox3' in o &&
+        (o as THREE.Box3).isBox3
+      ) {
+        return o as THREE.Box3
+      }
+      // Check for OBB
+      if (o && typeof o === 'object' && 'halfSize' in o && 'matrix' in o) {
+        return o as { halfSize: [number, number, number]; matrix: number[] }
+      }
+      // Fallback: Mesh -> Box3
+      return new THREE.Box3().setFromObject(o as THREE.Mesh)
+    })
   }
 
   public plan(
@@ -149,7 +171,7 @@ export class RRTPlanner {
       console.warn(
         'Goal in collision. Searching for valid neighbor for RRT-Connect...'
       )
-      const validNeighbor = this.findValidNeighbor(goalAngles)
+      const validNeighbor = this.findValidNeighbor(goalAngles, targetPos)
       if (validNeighbor) {
         console.log('Found valid neighbor goal.')
         goalAngles = validNeighbor
@@ -166,27 +188,49 @@ export class RRTPlanner {
       }
     }
 
-    return this.planConnect(startAngles, goalAngles, params)
+    return this.planConnect(startAngles, goalAngles, params, targetPos)
   }
 
   /**
-   * Tries to find a collision-free configuration near a given point.
+   * Tries to find a collision-free configuration near a given point
+   * that ALSO reaches the target position.
+   * Uses progressive thresholds and returns the best collision-free candidate
+   * even if strict thresholds aren't met.
    * Useful when the IK solution is slightly inside a wall.
    */
   private findValidNeighbor(
     angles: number[],
-    attempts = 100,
-    range = 0.5
+    targetPos: THREE.Vector3,
+    attempts = 300,
+    range = 0.8
   ): number[] | null {
-    for (let i = 0; i < attempts; i++) {
-      const candidate = angles.map(
-        (a) => a + (this.random() * range * 2 - range)
-      )
-      if (!this.robot.checkCollision(candidate, this.obstacleBoxes)) {
-        return candidate
+    let best: number[] | null = null
+    let bestDist = Infinity
+
+    // Progressive thresholds - return early if we find something good enough
+    const thresholds = [0.2, 0.3, 0.4, 0.5]
+    const perTier = Math.max(1, Math.floor(attempts / thresholds.length))
+
+    for (const thr of thresholds) {
+      for (let i = 0; i < perTier; i++) {
+        const candidate = angles.map(
+          (a) => a + (this.random() * range * 2 - range)
+        )
+        if (!this.robot.checkCollision(candidate, this.obstacleBoxes)) {
+          const tip = this.robot.getTipPosition(candidate)
+          const d = tip.distanceTo(targetPos)
+          if (d < bestDist) {
+            best = candidate
+            bestDist = d
+          }
+          // Return early if within current threshold
+          if (d < thr) return candidate
+        }
       }
     }
-    return null
+
+    // Return best collision-free neighbor found (may help trees connect)
+    return best
   }
 
   /**
@@ -294,7 +338,8 @@ export class RRTPlanner {
   private planConnect(
     startAngles: number[],
     goalAngles: number[],
-    params: RRTParams
+    params: RRTParams,
+    targetPos: THREE.Vector3
   ): PlanResult {
     const { stepSize, maxIter, goalBias } = params
     const limits = this.robot.getLimits()
@@ -367,6 +412,31 @@ export class RRTPlanner {
           // Append the goalAngles explicitly if not already there
           // pathB started at Goal, so it's likely already there, but let's be safe
           if (goalAngles) finalPath.push(goalAngles)
+
+          // --- Final snap-to-target: try to connect to a valid IK goal
+          //     so the tip actually hits the specified target.
+          try {
+            const desired = this.robot.solveRobustIK(
+              targetPos,
+              this.obstacleBoxes,
+              this.random
+            )
+            const last = finalPath[finalPath.length - 1]!
+            const snapTree: Node[] = [{ angles: last, parent: null }]
+            // Slightly smaller step helps near obstacles
+            const snapNode = this.connect(
+              snapTree,
+              desired,
+              Math.max(0.01, stepSize * 0.75)
+            )
+            if (snapNode) {
+              const snapPath = this.getPathFromRoot(snapNode)
+              // Drop the first (duplicate) node
+              finalPath.push(...snapPath.slice(1))
+            }
+          } catch {
+            console.warn('Snap-to-target failed, using meet configuration.')
+          }
 
           return {
             path: finalPath,

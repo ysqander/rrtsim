@@ -80,6 +80,7 @@ export class SceneController {
     | ((pos: { x: number; y: number; z: number }) => void)
     | null = null
   public onObstacleMove: ((pos: { x: number; z: number }) => void) | null = null
+  public onObstacleRotate: ((rotation: number) => void) | null = null
 
   // Comparison mode callbacks
   public onComparisonProgress:
@@ -235,11 +236,19 @@ export class SceneController {
       if (this.obstacleGroup.position.y !== 0) {
         this.obstacleGroup.position.y = 0
       }
+      // Report position changes
       if (this.onObstacleMove) {
         this.onObstacleMove({
           x: this.obstacleGroup.position.x,
           z: this.obstacleGroup.position.z,
         })
+      }
+      // Report rotation changes (Y-axis rotation in degrees)
+      if (this.onObstacleRotate) {
+        const rotationDeg = (this.obstacleGroup.rotation.y * 180) / Math.PI
+        // Normalize to 0-360
+        const normalized = ((rotationDeg % 360) + 360) % 360
+        this.onObstacleRotate(normalized)
       }
     })
     this.scene.add(this.obstacleTransformControl.getHelper())
@@ -920,6 +929,7 @@ export class SceneController {
         params: effectiveParams,
         robotConfig: this.robot.CONFIG,
         obstacles: this.getObstacleBoxes(),
+        obstaclesOBB: this.getObstacleOBBs(),
       }
 
       this.worker.postMessage(workerInput)
@@ -935,11 +945,22 @@ export class SceneController {
     } else {
       // Fallback to main thread if worker not available
       console.warn('[SceneController] Worker not available, using main thread')
-      // Rebuild planner with all obstacles
-      this.planner = new RRTPlanner(this.robot, [
-        this.obstacle,
-        ...this.extraObstacles,
-      ])
+      // Rebuild planner with OBBs for accurate rotated obstacle collision
+      const obbs = this.getObstacleOBBs()
+      // Add floor as actual Box3
+      const floorBox = new THREE.Box3(
+        new THREE.Vector3(
+          -SceneController.FLOOR_HALF_EXTENT,
+          -10,
+          -SceneController.FLOOR_HALF_EXTENT
+        ),
+        new THREE.Vector3(
+          SceneController.FLOOR_HALF_EXTENT,
+          SceneController.FLOOR_Y,
+          SceneController.FLOOR_HALF_EXTENT
+        )
+      )
+      this.planner = new RRTPlanner(this.robot, [...obbs, floorBox])
       this.runPlannerMainThread(startAngles, effectiveParams)
     }
   }
@@ -999,6 +1020,7 @@ export class SceneController {
       },
       robotConfig: this.robot.CONFIG,
       obstacles: this.getObstacleBoxes(),
+      obstaclesOBB: this.getObstacleOBBs(),
     }
 
     try {
@@ -1574,6 +1596,72 @@ export class SceneController {
     return boxes
   }
 
+  /**
+   * Get all obstacles as Oriented Bounding Boxes (OBBs) for accurate collision
+   * detection with rotated obstacles. Each OBB includes halfSize and world matrix.
+   * This is essential for properly handling rotated obstacles like gates.
+   */
+  private getObstacleOBBs(): {
+    halfSize: [number, number, number]
+    matrix: number[]
+  }[] {
+    const obbs: { halfSize: [number, number, number]; matrix: number[] }[] = []
+
+    // Main obstacle if visible (kept for legacy, usually hidden when using group)
+    if (this.obstacle.position.y > -5) {
+      this.obstacle.updateMatrixWorld(true)
+      const geom = this.obstacle.geometry as THREE.BufferGeometry
+      if (!geom.boundingBox) geom.computeBoundingBox()
+      const bb = geom.boundingBox!
+      obbs.push({
+        halfSize: [
+          (bb.max.x - bb.min.x) / 2,
+          (bb.max.y - bb.min.y) / 2,
+          (bb.max.z - bb.min.z) / 2,
+        ],
+        matrix: this.obstacle.matrixWorld.toArray(),
+      })
+    }
+
+    // Group children (supports rotation)
+    this.obstacleGroup.updateMatrixWorld(true)
+    this.obstacleGroup.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) {
+        const geom = child.geometry as THREE.BufferGeometry
+        if (!geom.boundingBox) geom.computeBoundingBox()
+        const bb = geom.boundingBox!
+        obbs.push({
+          halfSize: [
+            (bb.max.x - bb.min.x) / 2,
+            (bb.max.y - bb.min.y) / 2,
+            (bb.max.z - bb.min.z) / 2,
+          ],
+          matrix: child.matrixWorld.toArray(),
+        })
+      }
+    })
+
+    // Extra obstacles
+    for (const mesh of this.extraObstacles) {
+      mesh.updateMatrixWorld(true)
+      const geom = mesh.geometry as THREE.BufferGeometry
+      if (!geom.boundingBox) geom.computeBoundingBox()
+      const bb = geom.boundingBox!
+      obbs.push({
+        halfSize: [
+          (bb.max.x - bb.min.x) / 2,
+          (bb.max.y - bb.min.y) / 2,
+          (bb.max.z - bb.min.z) / 2,
+        ],
+        matrix: mesh.matrixWorld.toArray(),
+      })
+    }
+
+    // Note: Floor is handled as AABB via getObstacleBoxes(), not needed in OBB list
+
+    return obbs
+  }
+
   // --- CONNECT SHOWCASE ENVIRONMENT ---
   // Creates a C-shaped / narrow passage environment for step 3 to clearly
   // demonstrate the bidirectional nature of RRT-Connect
@@ -1807,6 +1895,42 @@ export class SceneController {
     return {
       x: this.obstacleGroup.position.x,
       z: this.obstacleGroup.position.z,
+    }
+  }
+
+  /**
+   * Get current obstacle rotation in degrees (Y-axis)
+   */
+  public getObstacleRotation(): number {
+    const rotationDeg = (this.obstacleGroup.rotation.y * 180) / Math.PI
+    return ((rotationDeg % 360) + 360) % 360
+  }
+
+  /**
+   * Set obstacle rotation in degrees (Y-axis)
+   */
+  public setObstacleRotation(degrees: number) {
+    this.obstacleGroup.rotation.y = (degrees * Math.PI) / 180
+    if (this.onObstacleRotate) {
+      this.onObstacleRotate(degrees)
+    }
+  }
+
+  /**
+   * Set obstacle transform mode (translate or rotate)
+   */
+  public setObstacleTransformMode(mode: 'translate' | 'rotate') {
+    this.obstacleTransformControl.setMode(mode)
+    if (mode === 'translate') {
+      // Lock to XZ plane only (no Y movement)
+      this.obstacleTransformControl.showX = true
+      this.obstacleTransformControl.showY = false
+      this.obstacleTransformControl.showZ = true
+    } else {
+      // For rotation, only allow Y-axis rotation
+      this.obstacleTransformControl.showX = false
+      this.obstacleTransformControl.showY = true
+      this.obstacleTransformControl.showZ = false
     }
   }
 

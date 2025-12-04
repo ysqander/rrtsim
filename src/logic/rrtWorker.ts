@@ -9,6 +9,8 @@ export interface WorkerInput {
   params: RRTParams
   robotConfig: LinkConfig[]
   obstacles: { min: [number, number, number]; max: [number, number, number] }[]
+  // OBBs for accurate rotated obstacle collision detection
+  obstaclesOBB?: { halfSize: [number, number, number]; matrix: number[] }[]
 }
 
 // Output data sent from worker back to main thread
@@ -27,17 +29,51 @@ export interface WorkerOutput {
 
 // Worker message handler
 self.onmessage = (e: MessageEvent<WorkerInput>) => {
-  const { startAngles, targetPos, params, robotConfig, obstacles } = e.data
+  const {
+    startAngles,
+    targetPos,
+    params,
+    robotConfig,
+    obstacles,
+    obstaclesOBB,
+  } = e.data
   const start = performance.now()
 
   try {
     // Reconstruct Three.js objects from serialized data
     const robot = new Robot(robotConfig)
-    const boxes = obstacles.map(
-      (b) =>
-        new THREE.Box3(new THREE.Vector3(...b.min), new THREE.Vector3(...b.max))
-    )
-    const planner = new RRTPlanner(robot, boxes)
+
+    // Prefer OBBs for accurate rotated obstacle collision; fall back to AABBs
+    // Include floor AABB from the regular obstacles list (it's always the last one)
+    const floorBox =
+      obstacles.length > 0
+        ? new THREE.Box3(
+            new THREE.Vector3(...obstacles[obstacles.length - 1]!.min),
+            new THREE.Vector3(...obstacles[obstacles.length - 1]!.max)
+          )
+        : null
+
+    let obstaclesForPlanner: (
+      | THREE.Box3
+      | { halfSize: [number, number, number]; matrix: number[] }
+    )[]
+
+    if (obstaclesOBB && obstaclesOBB.length > 0) {
+      // Use OBBs for obstacles + floor AABB
+      obstaclesForPlanner = [...obstaclesOBB]
+      if (floorBox) obstaclesForPlanner.push(floorBox)
+    } else {
+      // Fall back to all AABBs
+      obstaclesForPlanner = obstacles.map(
+        (b) =>
+          new THREE.Box3(
+            new THREE.Vector3(...b.min),
+            new THREE.Vector3(...b.max)
+          )
+      )
+    }
+
+    const planner = new RRTPlanner(robot, obstaclesForPlanner)
 
     // Run planning - now returns PlanResult with failure info
     const target = new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z)

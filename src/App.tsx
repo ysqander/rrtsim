@@ -81,17 +81,17 @@ const RRT_PRESETS = {
     description: 'Tutorial defaults - likely to fail',
   },
   balanced: {
-    stepSize: 0.1,
-    maxIter: 7000,
-    goalBias: 0.1,
+    stepSize: 0.2,
+    maxIter: 10000,
+    goalBias: 0.15,
     seed: 40,
     label: 'Balanced',
     description: 'Good balance of speed and thoroughness',
   },
   strong: {
-    stepSize: 0.2,
-    maxIter: 10000,
-    goalBias: 0.15,
+    stepSize: 0.3,
+    maxIter: 15000,
+    goalBias: 0.2,
     seed: 40,
     label: 'Strong',
     description: 'Higher success rate for hard problems',
@@ -127,6 +127,10 @@ function App() {
     'wall' | 'inverted_u' | 'corridor'
   >('wall')
   const [obstaclePos, setObstaclePos] = useState({ x: 1.0, z: 0 })
+  const [obstacleRotation, setObstacleRotation] = useState(0) // degrees, 0-360
+  const [obstacleTransformMode, setObstacleTransformMode] = useState<
+    'translate' | 'rotate'
+  >('translate')
   const [editingTarget, setEditingTarget] = useState(true) // true = target, false = obstacles
 
   // Shape-specific dimension state
@@ -136,8 +140,8 @@ function App() {
     thickness: 0.2,
   })
   const [gateDims, setGateDims] = useState({
-    gapWidth: 0.8,
-    height: 2.0,
+    gapWidth: 1.6,
+    height: 3.2,
     pillarThickness: 0.4,
   })
   const [corridorDims, setCorridorDims] = useState({
@@ -177,6 +181,7 @@ function App() {
     }
     controller.onTargetMove = setTargetPos
     controller.onObstacleMove = (pos) => setObstaclePos(pos)
+    controller.onObstacleRotate = (rotation) => setObstacleRotation(rotation)
 
     // Comparison mode callbacks (for Step 3 fair comparison)
     controller.onComparisonProgress = (phase) => setComparisonPhase(phase)
@@ -290,38 +295,50 @@ function App() {
       controllerRef.current.setGhostTreeVisible(showComparison)
 
       if (tutorialMode) {
-        // IMPORTANT: Keep the SAME environment as Step 2 for fair comparison!
-        // Don't call setupConnectShowcase() - we want identical conditions.
-        // The wall preset and target position should already be set from step 2,
-        // but we ensure they're correct here for consistency.
+        // Setup a gate environment for RRT-Connect demo
+        // This showcases how both trees grow toward each other through the gap
 
-        // Reset joints to default config (same as step 2)
+        // Reset joints and add extra joints for 6 DOF robot
         controllerRef.current.resetJoints()
+        // Add 2 extra joints to get 6 DOF (default is 4)
+        controllerRef.current.addJoint()
+        controllerRef.current.addJoint()
         setJointCount(controllerRef.current.getJointCount())
 
-        // Reset to wall preset (same as step 2)
-        controllerRef.current.setObstaclePreset('wall', wallDims)
-        setObstaclePreset('wall')
-        const pos = controllerRef.current.getObstaclePosition()
-        setObstaclePos(pos)
+        // Use inverted_u (gate) preset
+        const gateDefaults = {
+          gapWidth: 1.6,
+          height: 3.2,
+          pillarThickness: 0.4,
+        }
+        controllerRef.current.setObstaclePreset('inverted_u', gateDefaults)
+        setObstaclePreset('inverted_u')
+        setGateDims(gateDefaults)
+
+        // Set obstacle position and rotation
+        controllerRef.current.setObstaclePosition(3.11, 1.15)
+        controllerRef.current.setObstacleRotation(321)
+        setObstaclePos({ x: 3.11, z: 1.15 })
+        setObstacleRotation(321)
+
         setEditingTarget(true)
         controllerRef.current.setEditingTarget(true)
 
-        // Reset robot to home position for fair comparison
+        // Reset robot to home position
         controllerRef.current.resetRobotPosition()
 
-        // Use same target position as Step 2 for consistent comparison
-        controllerRef.current.setTargetPosition(2.24, 2.59, 2.0)
+        // Target positioned behind the gate
+        controllerRef.current.setTargetPosition(3.31, 1.53, 1.88)
 
-        // Apply WEAK defaults again to show improvement (must match step 2 exactly)
-        const weakParams = {
-          stepSize: 0.05,
-          maxIter: 5000,
-          goalBias: 0.0,
+        // Apply balanced defaults that find a neat solution
+        const balancedParams = {
+          stepSize: 0.2,
+          maxIter: 10000,
+          goalBias: 0.15,
           seed: 40,
         }
-        setRrtParams(weakParams)
-        controllerRef.current.updateRRTParams(weakParams)
+        setRrtParams(balancedParams)
+        controllerRef.current.updateRRTParams(balancedParams)
 
         // Zoom out to see the whole scene
         controllerRef.current.camera.position.set(5, 5, 8)
@@ -612,7 +629,7 @@ function App() {
                       <input
                         type="range"
                         min="1000"
-                        max="10000"
+                        max="20000"
                         step="1000"
                         value={rrtParams.maxIter}
                         onChange={(e) =>
@@ -942,7 +959,7 @@ function App() {
                   <input
                     type="range"
                     min="1000"
-                    max="10000"
+                    max="20000"
                     step="1000"
                     value={rrtParams.maxIter}
                     onChange={(e) =>
@@ -1097,8 +1114,11 @@ function App() {
                 if (step === 1) {
                   // Greedy step: target behind wall
                   controllerRef.current?.setTargetPosition(0.39, 1.65, 2.0)
+                } else if (step === 3) {
+                  // RRT-Connect step: target behind gate
+                  controllerRef.current?.setTargetPosition(3.31, 1.53, 1.88)
                 } else {
-                  // RRT steps (2, 3) and Intro: standard RRT target position
+                  // RRT steps (2) and Intro: standard RRT target position
                   controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
                 }
               }}
@@ -1248,14 +1268,52 @@ function App() {
                 onClick={() => {
                   setEditingTarget(false)
                   controllerRef.current?.setEditingTarget(false)
+                  // Reset to translate mode when switching to obstacle editing
+                  setObstacleTransformMode('translate')
+                  controllerRef.current?.setObstacleTransformMode('translate')
                 }}
                 style={{ flex: 1, fontSize: '0.8rem' }}
               >
-                📦 Move Obstacle
+                📦 Edit Obstacle
               </button>
             </div>
 
-            {/* Position Display (when editing obstacles) */}
+            {/* Obstacle Transform Mode Toggle (Move/Rotate) */}
+            {!editingTarget && (
+              <div
+                className="toggle-row"
+                style={{
+                  display: 'flex',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                }}
+              >
+                <button
+                  className={
+                    obstacleTransformMode === 'translate' ? 'active' : ''
+                  }
+                  onClick={() => {
+                    setObstacleTransformMode('translate')
+                    controllerRef.current?.setObstacleTransformMode('translate')
+                  }}
+                  style={{ flex: 1, fontSize: '0.75rem', padding: '0.3rem' }}
+                >
+                  ↔ Move
+                </button>
+                <button
+                  className={obstacleTransformMode === 'rotate' ? 'active' : ''}
+                  onClick={() => {
+                    setObstacleTransformMode('rotate')
+                    controllerRef.current?.setObstacleTransformMode('rotate')
+                  }}
+                  style={{ flex: 1, fontSize: '0.75rem', padding: '0.3rem' }}
+                >
+                  🔄 Rotate
+                </button>
+              </div>
+            )}
+
+            {/* Position and Rotation Display (when editing obstacles) */}
             {!editingTarget && (
               <div
                 style={{
@@ -1264,8 +1322,11 @@ function App() {
                   marginBottom: '0.5rem',
                 }}
               >
-                Position: X={obstaclePos.x.toFixed(2)}, Z=
-                {obstaclePos.z.toFixed(2)}
+                <div>
+                  Position: X={obstaclePos.x.toFixed(2)}, Z=
+                  {obstaclePos.z.toFixed(2)}
+                </div>
+                <div>Rotation: {obstacleRotation.toFixed(0)}°</div>
               </div>
             )}
 
