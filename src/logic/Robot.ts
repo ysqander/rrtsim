@@ -468,9 +468,11 @@ export class Robot {
   // --- ROBUST IK SOLVER (CCD + Random Restarts) ---
   // Tries to find a solution that is also collision-free AND reaches the target
   // Accepts either a Mesh (for main thread), a Box3 directly (for worker), or an array of either
+  // Optional `random` parameter allows passing a seeded PRNG for deterministic behavior
   public solveRobustIK(
     targetPos: THREE.Vector3,
-    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>
+    obstacle: THREE.Mesh | THREE.Box3 | Array<THREE.Mesh | THREE.Box3>,
+    random: () => number = Math.random
   ): number[] {
     const limits = this.getLimits()
     const DISTANCE_THRESHOLD = 0.1 // Must be this close to be valid
@@ -490,9 +492,10 @@ export class Robot {
 
     // 2. If collision or unreachable, try Random initial angle retries.
     // (We prefer a valid solution even if it takes a few ms more)
+    // Uses the provided random function for deterministic behavior when seeded
     for (let k = 0; k < 100; k++) {
-      // Generate random seed
-      const randomSeed = limits.map((l) => Math.random() * (l[1] - l[0]) + l[0])
+      // Generate random seed using the provided random function
+      const randomSeed = limits.map((l) => random() * (l[1] - l[0]) + l[0])
       const attempt = this.calculateIK(targetPos, randomSeed)
       if (isValid(attempt)) {
         return attempt

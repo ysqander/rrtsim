@@ -6,42 +6,41 @@ import './App.css'
 // Maps failure reasons to user-friendly messages and suggestions
 function getFailureFeedback(
   reason: FailureReason,
-  isGreedy?: boolean
+  isGreedy?: boolean,
+  step?: number
 ): { message: string; suggestions: string[] } | null {
   if (!reason) return null
 
+  // Greedy (CCD) has no tunable parameters - just suggest moving the target
   if (isGreedy) {
-    // Special handling for Greedy IK failures
-    if (reason === 'goal_in_collision') {
-      return {
-        message: 'Direct path blocked by obstacle',
-        suggestions: [
-          'Move the target to a clear position',
-          'Use RRT planner (Step 2+) to find alternate paths',
-        ],
-      }
+    const messages: Record<string, string> = {
+      goal_in_collision: 'Direct path blocked by obstacle',
+      self_collision: 'Robot would collide with itself',
+      unreachable: 'Target appears unreachable',
+      timeout: 'Could not reach target',
     }
-    if (reason === 'self_collision') {
-      return {
-        message: 'Robot would collide with itself',
-        suggestions: [
-          'Move target to a less extreme position',
-          'Try removing a joint for simpler kinematics',
-        ],
-      }
+    return {
+      message: messages[reason] || 'Could not reach target',
+      suggestions: ['Move target to another position'],
     }
   }
 
   switch (reason) {
-    case 'timeout':
+    case 'timeout': {
+      // Base suggestions for timeout
+      const suggestions = [
+        'Increase Max Iterations',
+        'Increase Step Size for faster exploration',
+      ]
+      // Only show Goal Bias suggestion in Step 3 where it's visible
+      if (step !== 2) {
+        suggestions.push('Increase Goal Bias to focus search')
+      }
       return {
         message: 'Iteration budget exhausted',
-        suggestions: [
-          'Increase Max Iterations',
-          'Increase Step Size for faster exploration',
-          'Increase Goal Bias to focus search',
-        ],
+        suggestions,
       }
+    }
     case 'unreachable':
       return {
         message: 'Target appears unreachable',
@@ -77,6 +76,7 @@ const RRT_PRESETS = {
     stepSize: 0.05,
     maxIter: 5000,
     goalBias: 0.0,
+    seed: 40,
     label: 'Weak',
     description: 'Tutorial defaults - likely to fail',
   },
@@ -84,6 +84,7 @@ const RRT_PRESETS = {
     stepSize: 0.1,
     maxIter: 7000,
     goalBias: 0.1,
+    seed: 40,
     label: 'Balanced',
     description: 'Good balance of speed and thoroughness',
   },
@@ -91,6 +92,7 @@ const RRT_PRESETS = {
     stepSize: 0.2,
     maxIter: 10000,
     goalBias: 0.15,
+    seed: 40,
     label: 'Strong',
     description: 'Higher success rate for hard problems',
   },
@@ -108,13 +110,17 @@ function App() {
     z: number
   } | null>(null)
   const [scenario, setScenario] = useState<'easy' | 'medium' | 'hard'>('medium')
-  const [debugMode, setDebugMode] = useState(false)
   // Tutorial Mode: If true, enforces lesson scenarios. If false, allows free exploration.
   const [tutorialMode, setTutorialMode] = useState(true)
   // Auto-Swivel: Automatically orbit camera after running planner (once, then auto-disables)
   const [autoSwivel, setAutoSwivel] = useState(true)
   // Show comparison with Standard RRT in step 3 (requires running Std RRT first in step 2)
   const [showComparison, setShowComparison] = useState(true)
+
+  // Comparison mode progress indicator (for Step 3 tutorial mode)
+  const [comparisonPhase, setComparisonPhase] = useState<
+    'idle' | 'standard' | 'connect' | 'done'
+  >('idle')
 
   // Obstacle Preset System
   const [obstaclePreset, setObstaclePreset] = useState<
@@ -152,6 +158,7 @@ function App() {
     stepSize: 0.05,
     maxIter: 5000,
     goalBias: 0.0,
+    seed: 40,
   })
 
   // 1. Initialize Scene
@@ -170,6 +177,10 @@ function App() {
     }
     controller.onTargetMove = setTargetPos
     controller.onObstacleMove = (pos) => setObstaclePos(pos)
+
+    // Comparison mode callbacks (for Step 3 fair comparison)
+    controller.onComparisonProgress = (phase) => setComparisonPhase(phase)
+    controller.onStandardStatsUpdate = (stdStats) => setStandardStats(stdStats)
 
     // Get initial joint count
     setJointCount(controller.getJointCount())
@@ -215,10 +226,6 @@ function App() {
       // Trigger Camera Intro Animation on Entry
       controllerRef.current.animateCameraIntro()
 
-      // Reset Debug Mode
-      setDebugMode(false)
-      controllerRef.current.toggleCollisionDebug(false)
-
       if (tutorialMode) {
         // HARDCODED FAIL CASE:
         // Wall is at z=1. Robot at z=0.
@@ -240,10 +247,12 @@ function App() {
       if (tutorialMode) {
         console.log('[DEBUG] Tutorial mode: resetting scene')
         // FORCE RESET SCENE STATE for consistent "Failure" Demo
-        // 1. Reset Joints
+        // 1. Reset Joints (rebuilds robot with default config)
         controllerRef.current.resetJoints()
         setJointCount(controllerRef.current.getJointCount())
-        console.log('[DEBUG] resetJoints done')
+        // 1b. Explicitly reset robot to home position (all angles = 0)
+        controllerRef.current.resetRobotPosition()
+        console.log('[DEBUG] resetJoints + resetRobotPosition done')
         // 2. Reset Obstacle to wall preset
         setObstaclePreset('wall')
         controllerRef.current.setObstaclePreset('wall', wallDims)
@@ -262,7 +271,12 @@ function App() {
       // but if it's NOT tutorial mode, maybe we shouldn't force them?
       // The prompt implies "free exploration", so let's ONLY set weak params in Tutorial Mode.
       if (tutorialMode) {
-        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.0 }
+        const weakParams = {
+          stepSize: 0.05,
+          maxIter: 5000,
+          goalBias: 0.0,
+          seed: 40,
+        }
         setRrtParams(weakParams)
         controllerRef.current.updateRRTParams(weakParams)
         console.log('[DEBUG] updateRRTParams done')
@@ -276,20 +290,36 @@ function App() {
       controllerRef.current.setGhostTreeVisible(showComparison)
 
       if (tutorialMode) {
-        // Build the more challenging connect demo environment (inverted-U gate)
-        controllerRef.current.setupConnectShowcase()
-        setObstaclePreset('inverted_u')
-        setGateDims({ gapWidth: 0.8, height: 2.0, pillarThickness: 0.4 })
+        // IMPORTANT: Keep the SAME environment as Step 2 for fair comparison!
+        // Don't call setupConnectShowcase() - we want identical conditions.
+        // The wall preset and target position should already be set from step 2,
+        // but we ensure they're correct here for consistency.
+
+        // Reset joints to default config (same as step 2)
+        controllerRef.current.resetJoints()
+        setJointCount(controllerRef.current.getJointCount())
+
+        // Reset to wall preset (same as step 2)
+        controllerRef.current.setObstaclePreset('wall', wallDims)
+        setObstaclePreset('wall')
         const pos = controllerRef.current.getObstaclePosition()
         setObstaclePos(pos)
         setEditingTarget(true)
         controllerRef.current.setEditingTarget(true)
 
+        // Reset robot to home position for fair comparison
+        controllerRef.current.resetRobotPosition()
+
         // Use same target position as Step 2 for consistent comparison
         controllerRef.current.setTargetPosition(2.24, 2.59, 2.0)
 
-        // Apply WEAK defaults again to show improvement
-        const weakParams = { stepSize: 0.05, maxIter: 5000, goalBias: 0.0 }
+        // Apply WEAK defaults again to show improvement (must match step 2 exactly)
+        const weakParams = {
+          stepSize: 0.05,
+          maxIter: 5000,
+          goalBias: 0.0,
+          seed: 40,
+        }
         setRrtParams(weakParams)
         controllerRef.current.updateRRTParams(weakParams)
 
@@ -314,9 +344,20 @@ function App() {
   // Handlers
   const handleStepChange = (newStep: 0 | 1 | 2 | 3) => {
     // Capture Standard RRT stats when leaving Step 2 (Standard RRT)
-    // This ensures we compare against the EXACT run the user just saw.
-    if (step === 2 && stats) {
+    // This ensures we compare against the EXACT run the user just saw (non-tutorial mode).
+    if (step === 2 && stats && !tutorialMode) {
       setStandardStats(stats)
+    }
+
+    // Reset comparison phase when entering step 3 or leaving it
+    if (newStep === 3 || step === 3) {
+      setComparisonPhase('idle')
+    }
+
+    // Clear standardStats when entering step 3 in tutorial mode
+    // (will be populated by the comparison run)
+    if (newStep === 3 && tutorialMode) {
+      setStandardStats(null)
     }
 
     setStep(newStep)
@@ -331,12 +372,6 @@ function App() {
     controllerRef.current?.setEditingTarget(true)
   }
 
-  const toggleDebug = () => {
-    const newVal = !debugMode
-    setDebugMode(newVal)
-    controllerRef.current?.toggleCollisionDebug(newVal)
-  }
-
   const toggleTutorialMode = () => {
     setTutorialMode(!tutorialMode)
   }
@@ -347,6 +382,7 @@ function App() {
 
   // Gating helpers
   const isInteractiveStep = step >= 1
+  const isObstacleEditable = step >= 2 // Obstacle controls only useful in RRT steps
 
   return (
     <div className="app-container">
@@ -544,6 +580,7 @@ function App() {
                               stepSize: preset.stepSize,
                               maxIter: preset.maxIter,
                               goalBias: preset.goalBias,
+                              seed: preset.seed,
                             })
                           }
                           title={preset.description}
@@ -588,6 +625,44 @@ function App() {
                         }
                       />
                     </div>
+                    <div className="parameter-control">
+                      <label>
+                        Seed: {rrtParams.seed}
+                        {tutorialMode && (
+                          <span
+                            className="tiny-text"
+                            style={{ marginLeft: '0.5rem', opacity: 0.7 }}
+                          >
+                            (locked in tutorial mode)
+                          </span>
+                        )}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="999999"
+                        value={rrtParams.seed}
+                        disabled={tutorialMode}
+                        onChange={(e) =>
+                          handleParamChange(
+                            'seed',
+                            parseInt(e.target.value) || 0
+                          )
+                        }
+                        style={{
+                          width: '100%',
+                          padding: '0.3rem',
+                          opacity: tutorialMode ? 0.5 : 1,
+                        }}
+                      />
+                    </div>
+                    <p
+                      className="tiny-text"
+                      style={{ marginTop: '0.3rem', marginBottom: '0.5rem' }}
+                    >
+                      Seed controls randomness. Same seed = same exploration
+                      pattern.
+                    </p>
                     <button
                       className={`primary-btn ${
                         !stats ? 'pulse-animation' : ''
@@ -631,7 +706,9 @@ function App() {
                     </strong>
                     <p>
                       Increase Step Size and Max Iterations. Can you get it to
-                      find the target? Notice how many nodes it needs.
+                      find the target? Notice how many nodes it needs. You can
+                      reset the robot and the target to starting positions on
+                      the right hand side.
                     </p>
                   </div>
                   <br />
@@ -673,7 +750,7 @@ function App() {
               <div className="explanation">
                 <h3>Meeting in the Middle</h3>
                 <p>
-                  Bi directional RRT connect is a more efficient algorithm than
+                  Bi-directional RRT-Connect is a more efficient algorithm than
                   standard RRT.
                   <br />
                   <br />
@@ -681,28 +758,29 @@ function App() {
                   the goal. They aggressively try to meet in the middle.
                   <br />
                   <br />
-                  Each tree takes turn. One takes a step toward a random point
+                  Each tree takes turns. One takes a step toward a random point
                   and the other one "looks" at where the new extension is and
-                  tried to extend its nearest node to it. Next, they swap roles
+                  tries to extend its nearest node to it. Next, they swap roles
                   and redo the same process.
                   <br />
                   <br />
-                  <p>
-                    This random turn by turn step and connect interplay might
-                    seem like it's going to be chaotic but it is actually very
-                    efficient.
-                  </p>
-                  <br />
+                  <span>
+                    This random turn-by-turn step and connect interplay might
+                    seem chaotic but it is actually very efficient.
+                  </span>
                 </p>
 
-                <div className="callout-box action">
-                  <strong>Try This Next</strong>
-                  <p>
-                    Go back to Standard RRT. click the weak preset and run it
-                    once more then come back here and try the same weak preset
-                    with RRT-connect for comparison.
-                  </p>
-                </div>
+                {tutorialMode && (
+                  <div className="callout-box action">
+                    <strong>Fair Comparison Mode</strong>
+                    <p>
+                      Click <b>"Run Comparison"</b> to see both algorithms
+                      side-by-side with identical parameters. Standard RRT runs
+                      first, then RRT-Connect - so you get a true
+                      apples-to-apples comparison.
+                    </p>
+                  </div>
+                )}
 
                 {/* Comparison Toggle */}
                 <label
@@ -761,32 +839,6 @@ function App() {
                             Time: {stats.time}ms
                             <br />
                             Nodes: {stats.nodes}
-                            {typeof stats.startNodes === 'number' &&
-                              typeof stats.goalNodes === 'number' && (
-                                <>
-                                  <br />
-                                  <span style={{ fontSize: '0.85rem' }}>
-                                    Start-tree: {stats.startNodes}
-                                  </span>
-                                  <br />
-                                  <span style={{ fontSize: '0.85rem' }}>
-                                    Goal-tree: {stats.goalNodes}
-                                  </span>
-                                </>
-                              )}
-                            {typeof stats.meetIteration === 'number' && (
-                              <>
-                                <br />
-                                <span
-                                  style={{
-                                    fontSize: '0.85rem',
-                                    color: '#88ff88',
-                                  }}
-                                >
-                                  Met at iter: {stats.meetIteration}
-                                </span>
-                              </>
-                            )}
                           </>
                         ) : (
                           <span>Running...</span>
@@ -820,8 +872,8 @@ function App() {
                       }}
                     >
                       The faint red ghost tree shows the volume Standard RRT had
-                      to explore (on the last attempt you ran on tab 2. Std
-                      RRT).
+                      to explore. Both algorithms used identical parameters for
+                      a fair comparison.
                     </p>
                   </div>
                 )}
@@ -836,8 +888,9 @@ function App() {
                       fontStyle: 'italic',
                     }}
                   >
-                    To see a comparison, first run Standard RRT in step 2, then
-                    return here.
+                    {tutorialMode
+                      ? 'Click "Run Comparison" to see both algorithms side-by-side.'
+                      : 'To see a comparison, first run Standard RRT in step 2, then return here.'}
                   </p>
                 )}
               </div>
@@ -870,6 +923,7 @@ function App() {
                           stepSize: preset.stepSize,
                           maxIter: preset.maxIter,
                           goalBias: preset.goalBias,
+                          seed: preset.seed,
                         })
                       }
                       title={preset.description}
@@ -922,20 +976,70 @@ function App() {
                     }
                   />
                 </div>
+                <div className="parameter-control">
+                  <label>
+                    Seed: {rrtParams.seed}
+                    {tutorialMode && (
+                      <span
+                        className="tiny-text"
+                        style={{ marginLeft: '0.5rem', opacity: 0.7 }}
+                      >
+                        (locked in tutorial mode)
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="999999"
+                    value={rrtParams.seed}
+                    disabled={tutorialMode}
+                    onChange={(e) =>
+                      handleParamChange('seed', parseInt(e.target.value) || 0)
+                    }
+                    style={{
+                      width: '100%',
+                      padding: '0.3rem',
+                      opacity: tutorialMode ? 0.5 : 1,
+                    }}
+                  />
+                </div>
+                <p className="tiny-text" style={{ marginTop: '0.3rem' }}>
+                  Seed controls randomness. Same seed = same exploration
+                  pattern.
+                </p>
               </div>
 
               <div className="nav-buttons">
                 <button onClick={() => handleStepChange(2)}>Back</button>
                 <button
                   className="run-btn"
-                  onClick={() => controllerRef.current?.runPlanner()}
+                  onClick={() => {
+                    // In tutorial mode, run fair comparison (both algorithms)
+                    if (tutorialMode) {
+                      setComparisonPhase('idle') // Reset before starting
+                      controllerRef.current?.runPlannerComparison()
+                    } else {
+                      controllerRef.current?.runPlanner()
+                    }
+                  }}
+                  disabled={
+                    comparisonPhase !== 'idle' && comparisonPhase !== 'done'
+                  }
                   style={{
-                    backgroundColor: '#2ecc71',
+                    backgroundColor:
+                      comparisonPhase !== 'idle' && comparisonPhase !== 'done'
+                        ? '#666'
+                        : '#2ecc71',
                     color: 'white',
                     fontWeight: 'bold',
                   }}
                 >
-                  ▶ Run Planner
+                  {comparisonPhase === 'standard' &&
+                    '⏳ Running Standard RRT...'}
+                  {comparisonPhase === 'connect' && '⏳ Running RRT-Connect...'}
+                  {(comparisonPhase === 'idle' || comparisonPhase === 'done') &&
+                    (tutorialMode ? '▶ Run Comparison' : '▶ Run Planner')}
                 </button>
               </div>
             </div>
@@ -989,14 +1093,29 @@ function App() {
             </p>
 
             <button
-              onClick={() => controllerRef.current?.setTargetPosition(2, 2, 0)}
+              onClick={() => {
+                // Reset to tutorial default based on current step
+                if (step === 1) {
+                  // Greedy step: target behind wall
+                  controllerRef.current?.setTargetPosition(0.39, 1.65, 2.0)
+                } else {
+                  // RRT steps (2, 3) and Intro: standard RRT target position
+                  controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
+                }
+              }}
               style={{ width: '100%', marginBottom: '0.5rem' }}
             >
               Reset Target Position
             </button>
             <button
               onClick={() => controllerRef.current?.resetRobotPosition()}
-              style={{ width: '100%', marginBottom: '0.5rem' }}
+              disabled={step === 1}
+              style={{
+                width: '100%',
+                marginBottom: '0.5rem',
+                opacity: step === 1 ? 0.4 : 1,
+                cursor: step === 1 ? 'not-allowed' : 'pointer',
+              }}
             >
               Reset Robot Position
             </button>
@@ -1012,6 +1131,10 @@ function App() {
               <button
                 className={scenario === 'easy' ? 'active' : ''}
                 onClick={() => handleScenarioChange('easy')}
+                disabled={step === 1}
+                style={
+                  step === 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}
+                }
               >
                 Free
               </button>
@@ -1024,6 +1147,10 @@ function App() {
               <button
                 className={scenario === 'hard' ? 'active' : ''}
                 onClick={() => handleScenarioChange('hard')}
+                disabled={step === 1}
+                style={
+                  step === 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}
+                }
               >
                 Deep
               </button>
@@ -1047,10 +1174,10 @@ function App() {
             </div>
           )}
 
-          {/* Obstacle Preset System */}
+          {/* Obstacle Preset System - Only editable in RRT steps */}
           <div
             className={`control-group ${
-              !isInteractiveStep ? 'gated-control' : ''
+              !isObstacleEditable ? 'gated-control' : ''
             }`}
           >
             <h4>Obstacle Shape</h4>
@@ -1395,52 +1522,39 @@ function App() {
               </button>
             </div>
           </div>
-
-          <div className="debug-section">
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={debugMode}
-                onChange={toggleDebug}
-              />
-              <span>Debug Hitboxes</span>
-            </label>
-          </div>
         </div>
       </div>
 
       {/* Status Bar - Horizontal bar at bottom showing stats and failure feedback */}
       {((step === 1 && stats && !stats.success) || step >= 2) && stats && (
         <div className="status-bar fade-in">
-          {/* Stats Section */}
-          <div className="status-bar-stats">
-            <div className="status-item">
-              <span className="status-label">Status</span>
-              <span
-                className={`status-value ${
-                  stats.success ? 'success' : 'error'
-                }`}
-              >
-                {stats.success
-                  ? 'CONVERGED'
-                  : stats.time > 0
-                  ? 'FAILED'
-                  : 'PLANNING'}
-              </span>
+          {/* Stats Section - Only show for RRT steps (2+), not Greedy */}
+          {step >= 2 && (
+            <div className="status-bar-stats">
+              <div className="status-item">
+                <span className="status-label">Status</span>
+                <span
+                  className={`status-value ${
+                    stats.success ? 'success' : 'error'
+                  }`}
+                >
+                  {stats.success
+                    ? 'CONVERGED'
+                    : stats.time > 0
+                    ? 'FAILED'
+                    : 'PLANNING'}
+                </span>
+              </div>
+              <div className="status-item">
+                <span className="status-label">Time</span>
+                <span className="status-value">{stats.time} ms</span>
+              </div>
+              <div className="status-item">
+                <span className="status-label">Nodes</span>
+                <span className="status-value">{stats.nodes}</span>
+              </div>
             </div>
-            {step >= 2 && (
-              <>
-                <div className="status-item">
-                  <span className="status-label">Time</span>
-                  <span className="status-value">{stats.time} ms</span>
-                </div>
-                <div className="status-item">
-                  <span className="status-label">Nodes</span>
-                  <span className="status-value">{stats.nodes}</span>
-                </div>
-              </>
-            )}
-          </div>
+          )}
 
           {/* Failure Feedback Section */}
           {!stats.success && stats.failureReason && (
@@ -1448,7 +1562,7 @@ function App() {
               <div className="feedback-reason">
                 <span className="feedback-icon">!</span>
                 <span className="feedback-message">
-                  {getFailureFeedback(stats.failureReason, stats.isGreedy)
+                  {getFailureFeedback(stats.failureReason, stats.isGreedy, step)
                     ?.message || 'Planning failed'}
                 </span>
               </div>
@@ -1456,7 +1570,8 @@ function App() {
                 <span className="suggestions-label">Try:</span>
                 {getFailureFeedback(
                   stats.failureReason,
-                  stats.isGreedy
+                  stats.isGreedy,
+                  step
                 )?.suggestions.map((s, i) => (
                   <span key={i} className="suggestion-chip">
                     {s}

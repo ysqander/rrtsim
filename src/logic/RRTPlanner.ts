@@ -1,6 +1,16 @@
 import * as THREE from 'three'
 import { Robot } from './Robot'
 
+// Seeded PRNG (mulberry32) - deterministic random when seed provided
+function mulberry32(seed: number): () => number {
+  return () => {
+    let t = (seed += 0x6d2b79f5)
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 interface Node {
   angles: number[]
   parent: Node | null
@@ -11,6 +21,7 @@ export interface RRTParams {
   maxIter: number
   goalBias: number
   algorithm?: 'standard' | 'connect'
+  seed?: number // Optional: makes sampling deterministic for reproducible results
 }
 
 // Failure reason types for detailed feedback
@@ -34,6 +45,7 @@ export class RRTPlanner {
   private robot: Robot
   private obstacleBoxes: THREE.Box3[]
   private TIME_LIMIT_MS = 3000 // Increased to 3 seconds for complex queries
+  private random: () => number = Math.random // Default to Math.random, seeded in plan()
 
   // Visualization helper
   public lastTrees: Node[] = []
@@ -65,6 +77,10 @@ export class RRTPlanner {
       algorithm: 'connect',
     }
   ): PlanResult {
+    // Initialize random function: seeded if seed provided, otherwise Math.random
+    this.random =
+      params.seed !== undefined ? mulberry32(params.seed) : Math.random
+
     this.lastTrees = [] // Reset visualization
 
     // --- STEP 0: CHECK IF TARGET IS EVEN REACHABLE ---
@@ -90,7 +106,11 @@ export class RRTPlanner {
 
     let goalAngles: number[] | null = null
 
-    const solution = this.robot.solveRobustIK(targetPos, this.obstacleBoxes)
+    const solution = this.robot.solveRobustIK(
+      targetPos,
+      this.obstacleBoxes,
+      this.random
+    )
 
     // this step checks for collisions based on the angles given by solveRobustIK
     // The planner needs to know: "Did the IK give me a perfect goal, or a broken one?"
@@ -160,7 +180,7 @@ export class RRTPlanner {
   ): number[] | null {
     for (let i = 0; i < attempts; i++) {
       const candidate = angles.map(
-        (a) => a + (Math.random() * range * 2 - range)
+        (a) => a + (this.random() * range * 2 - range)
       )
       if (!this.robot.checkCollision(candidate, this.obstacleBoxes)) {
         return candidate
@@ -223,13 +243,13 @@ export class RRTPlanner {
       // 1. Sample
       let sample: number[] = []
       // Use goalAngles for bias (even if it's slightly inside wall, it pulls us in right direction)
-      if (Math.random() < goalBias) {
+      if (this.random() < goalBias) {
         sample = [...goalAngles]
       } else {
         for (let d = 0; d < limits.length; d++) {
           const min = limits[d]![0]
           const max = limits[d]![1]
-          sample.push(Math.random() * (max - min) + min)
+          sample.push(this.random() * (max - min) + min)
         }
       }
 
@@ -301,14 +321,14 @@ export class RRTPlanner {
 
       // 1. We take a random point to extend the tree towards just like in standard RTT see planStandard function
       let sample: number[] = []
-      if (goalAngles && Math.random() < goalBias) {
+      if (goalAngles && this.random() < goalBias) {
         sample = [...goalAngles]
       } else {
         // Standard Random Sample
         for (let d = 0; d < limits.length; d++) {
           const min = limits[d]![0]
           const max = limits[d]![1]
-          sample.push(Math.random() * (max - min) + min)
+          sample.push(this.random() * (max - min) + min)
         }
       }
 

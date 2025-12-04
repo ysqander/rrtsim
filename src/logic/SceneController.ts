@@ -72,6 +72,16 @@ export class SceneController {
     | null = null
   public onObstacleMove: ((pos: { x: number; z: number }) => void) | null = null
 
+  // Comparison mode callbacks
+  public onComparisonProgress:
+    | ((phase: 'standard' | 'connect' | 'done') => void)
+    | null = null
+  public onStandardStatsUpdate: ((stats: PlannerStats) => void) | null = null
+
+  // Comparison mode state
+  private isComparisonMode = false
+  private _comparisonResolve: ((result: WorkerOutput) => void) | null = null // Stored for potential cancellation
+
   constructor(canvas: HTMLCanvasElement) {
     // 1. Setup ThreeJS
     this.scene = new THREE.Scene()
@@ -484,20 +494,14 @@ export class SceneController {
       // Note: We do NOT reset the target position, so it stays in the "stuck" spot
     }
 
-    // APPLY PRESETS
+    // NOTE: Param presets are now managed by App.tsx for proper React state sync.
+    // We only set the algorithm type here; App.tsx will call updateRRTParams with the full preset.
     if (mode === 'rrt-standard' || mode === 'rrt') {
-      // Weak defaults to force failure/struggle initially
-      const weakParams: RRTParams = {
-        stepSize: 0.05, // Tiny steps = slow exploration
-        maxIter: 5000, // Low iterations = likely timeout
-        goalBias: 0.05, // Low bias = less guidance
+      // Just update the algorithm type, preserve other params (including seed!)
+      this.rrtParams = {
+        ...this.rrtParams,
         algorithm: mode === 'rrt-standard' ? 'standard' : 'connect',
       }
-      this.rrtParams = weakParams
-      // Update UI state if possible? (This is one-way, React won't see this unless we sync back.
-      // For now, we just set internal state. Ideally App.tsx calls updateRRTParams on load)
-      // But wait, App.tsx controls the state. We should probably let App.tsx handle the presets.
-      // IGNORE THIS BLOCK - Logic moved to App.tsx for state sync.
     }
 
     // GREEDY runs immediately. RRT waits for button press.
@@ -874,6 +878,202 @@ export class SceneController {
       ])
       this.runPlannerMainThread(startAngles, effectiveParams)
     }
+  }
+
+  /**
+   * Run both Standard RRT and RRT-Connect sequentially for comparison.
+   * This ensures a fair apples-to-apples comparison with identical parameters.
+   */
+  public async runPlannerComparison(): Promise<void> {
+    console.log('[DEBUG] runPlannerComparison called')
+
+    // Prevent multiple simultaneous planning requests
+    if (this.isWorkerPlanning || this.isComparisonMode) {
+      console.log(
+        '[SceneController] Already planning, ignoring comparison request'
+      )
+      return
+    }
+
+    if (!this.worker) {
+      console.warn('[SceneController] Worker not available for comparison mode')
+      return
+    }
+
+    this.isComparisonMode = true
+    const startAngles = this.robot.getCurrentAngles()
+
+    // Clear old visuals
+    if (this.treeMesh) {
+      this.scene.remove(this.treeMesh)
+      this.treeMesh.geometry.dispose()
+      this.treeMesh = null
+    }
+    this.clearGhostTree()
+
+    // Ensure robot color is reset
+    this.robot.setOverrideColor(null)
+
+    // Build params for Standard RRT (same params, different algorithm)
+    const standardParams: RRTParams = {
+      ...this.rrtParams,
+      algorithm: 'standard',
+    }
+
+    // Build params for RRT-Connect
+    const connectParams: RRTParams = {
+      ...this.rrtParams,
+      algorithm: 'connect',
+    }
+
+    const workerInputBase = {
+      startAngles,
+      targetPos: {
+        x: this.targetMesh.position.x,
+        y: this.targetMesh.position.y,
+        z: this.targetMesh.position.z,
+      },
+      robotConfig: this.robot.CONFIG,
+      obstacles: this.getObstacleBoxes(),
+    }
+
+    try {
+      // --- PHASE 1: Run Standard RRT ---
+      console.log(
+        '[SceneController] Comparison Phase 1: Running Standard RRT...'
+      )
+      if (this.onComparisonProgress) {
+        this.onComparisonProgress('standard')
+      }
+
+      const standardResult = await this.runWorkerPlan({
+        ...workerInputBase,
+        params: standardParams,
+      })
+
+      // Visualize Standard RRT tree and capture as ghost
+      this.visualizeSearchTreeFromData(standardResult.treeData)
+
+      // Wait a frame for the tree mesh to be created
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+
+      // Snapshot as ghost tree (red)
+      this.snapshotStandardTree()
+
+      // Report Standard RRT stats
+      const standardStats: PlannerStats = {
+        time: standardResult.time,
+        nodes: standardResult.treeData.length,
+        success: standardResult.success,
+        failureReason: standardResult.failureReason,
+        failureDetails: standardResult.failureDetails,
+        isGreedy: false,
+      }
+
+      if (this.onStandardStatsUpdate) {
+        this.onStandardStatsUpdate(standardStats)
+      }
+
+      console.log(
+        `[SceneController] Standard RRT complete: ${standardResult.time}ms, ${standardResult.treeData.length} nodes`
+      )
+
+      // --- PHASE 2: Run RRT-Connect ---
+      console.log(
+        '[SceneController] Comparison Phase 2: Running RRT-Connect...'
+      )
+      if (this.onComparisonProgress) {
+        this.onComparisonProgress('connect')
+      }
+
+      // Clear the tree mesh before running connect (keep ghost)
+      // Note: visualizeSearchTreeFromData() above sets this.treeMesh, but TypeScript
+      // can't track that through async flow, so we re-check the type at runtime.
+      if (this.treeMesh !== null) {
+        const meshToDispose = this.treeMesh as THREE.LineSegments
+        this.scene.remove(meshToDispose)
+        meshToDispose.geometry.dispose()
+        this.treeMesh = null
+      }
+
+      // Reset robot to starting position for fair comparison
+      this.robot.setAngles(startAngles)
+
+      const connectResult = await this.runWorkerPlan({
+        ...workerInputBase,
+        params: connectParams,
+      })
+
+      // Visualize RRT-Connect tree (green)
+      this.visualizeSearchTreeFromData(connectResult.treeData)
+
+      // Report RRT-Connect stats
+      if (this.onStatsUpdate) {
+        this.onStatsUpdate({
+          time: connectResult.time,
+          nodes: connectResult.treeData.length,
+          success: connectResult.success,
+          failureReason: connectResult.failureReason,
+          failureDetails: connectResult.failureDetails,
+          isGreedy: false,
+          startNodes: connectResult.startNodes,
+          goalNodes: connectResult.goalNodes,
+          meetIteration: connectResult.meetIteration,
+        })
+      }
+
+      // Execute path if found
+      if (connectResult.path) {
+        this.plannedPath = connectResult.path
+        this.pathIndex = 0
+      }
+
+      console.log(
+        `[SceneController] RRT-Connect complete: ${connectResult.time}ms, ${connectResult.treeData.length} nodes`
+      )
+
+      // --- DONE ---
+      if (this.onComparisonProgress) {
+        this.onComparisonProgress('done')
+      }
+    } catch (error) {
+      console.error('[SceneController] Comparison mode error:', error)
+      this.robot.setOverrideColor(0xff0000)
+      setTimeout(() => {
+        this.robot.setOverrideColor(null)
+      }, 500)
+    } finally {
+      this.isComparisonMode = false
+    }
+  }
+
+  /**
+   * Helper: Run a single planner via worker and return a Promise with the result.
+   */
+  private runWorkerPlan(input: WorkerInput): Promise<WorkerOutput> {
+    return new Promise((resolve, reject) => {
+      if (!this.worker) {
+        reject(new Error('Worker not available'))
+        return
+      }
+
+      this.isWorkerPlanning = true
+      this._comparisonResolve = resolve
+
+      // Temporarily override the worker message handler
+      const originalHandler = this.worker.onmessage
+      this.worker.onmessage = (e: MessageEvent<WorkerOutput>) => {
+        this.isWorkerPlanning = false
+        this._comparisonResolve = null
+        // Restore original handler
+        if (this.worker) {
+          this.worker.onmessage = originalHandler
+        }
+        resolve(e.data)
+      }
+
+      this.worker.postMessage(input)
+    })
   }
 
   // Fallback: Run planner on main thread (blocks UI)
