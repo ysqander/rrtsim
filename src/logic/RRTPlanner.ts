@@ -166,7 +166,7 @@ export class RRTPlanner {
       }
     }
 
-    return this.planConnect(startAngles, goalAngles, targetPos, params)
+    return this.planConnect(startAngles, goalAngles, params)
   }
 
   /**
@@ -294,7 +294,6 @@ export class RRTPlanner {
   private planConnect(
     startAngles: number[],
     goalAngles: number[],
-    targetPos: THREE.Vector3,
     params: RRTParams
   ): PlanResult {
     const { stepSize, maxIter, goalBias } = params
@@ -337,12 +336,9 @@ export class RRTPlanner {
 
       if (newNodeA) {
         // 3. IF Tree A successfully grew, try to connect Tree B directly to that new node
-        const newNodeB = this.connect(
-          treeB,
-          newNodeA.angles,
-          stepSize,
-          targetPos
-        )
+        // NOTE: We connect in JOINT SPACE only - targetPos is NOT used here.
+        // The trees should meet wherever they can, not necessarily at the goal.
+        const newNodeB = this.connect(treeB, newNodeA.angles, stepSize)
 
         if (newNodeB) {
           // SUCCESS! The trees met.
@@ -392,11 +388,14 @@ export class RRTPlanner {
     this.lastTrees = [...startTree, ...goalTree]
 
     // Planning failed - determine reason
+    // IMPORTANT: Always return startNodes/goalNodes so both trees can be visualized
     if (timedOut) {
       return {
         path: null,
         failureReason: 'timeout',
         failureDetails: `Time limit (${this.TIME_LIMIT_MS}ms) exceeded. Try increasing step size or max iterations.`,
+        startNodes: startTree.length,
+        goalNodes: goalTree.length,
       }
     }
 
@@ -405,6 +404,8 @@ export class RRTPlanner {
       path: null,
       failureReason: 'timeout',
       failureDetails: `Max iterations (${maxIter}) reached. Try increasing iterations or adjusting parameters.`,
+      startNodes: startTree.length,
+      goalNodes: goalTree.length,
     }
   }
 
@@ -429,6 +430,11 @@ export class RRTPlanner {
     // Steer
     const newAngles = this.steer(nearest!.angles, targetAngles, stepSize)
 
+    // Avoid duplicating nodes when steer doesn't move (e.g., sampling the root/goal)
+    if (this.distance(nearest!.angles, newAngles) < 1e-6) {
+      return null
+    }
+
     // Check Collision (Segment Check)
     if (this.isSegmentValid(nearest!.angles, newAngles)) {
       const newNode: Node = { angles: newAngles, parent: nearest! }
@@ -440,11 +446,12 @@ export class RRTPlanner {
 
   // Tries to aggressively connect the tree to a target point until it hits a wall
   // Returns the final node reached (if it reached the target), or null
+  // NOTE: This uses JOINT SPACE only - no task-space validation.
+  // The trees meet wherever they can in configuration space, not necessarily at the goal position.
   private connect(
     tree: Node[],
     targetAngles: number[],
-    stepSize: number,
-    targetPos?: THREE.Vector3 // Optional target position for task-space validation
+    stepSize: number
   ): Node | null {
     let nearest = tree[0]
     let minDist = Infinity
@@ -474,21 +481,9 @@ export class RRTPlanner {
       tree.push(newNode)
       currentNode = newNode
 
-      // If very close in joint space, check task space too
+      // Success: close enough in joint space to be considered connected
       if (this.distance(newAngles, targetAngles) < 0.1) {
-        // Also verify task-space distance if targetPos provided
-        if (targetPos) {
-          const tipPos = this.robot.getTipPosition(newAngles)
-          const taskSpaceDist = tipPos.distanceTo(targetPos)
-          if (taskSpaceDist < 0.15) {
-            // 15cm task-space threshold
-            return newNode
-          }
-          // Close in joint space but not in task space - keep trying
-          // Don't return yet, continue stepping
-        } else {
-          return newNode
-        }
+        return newNode
       }
 
       // If steer didn't move us (we are stuck or at target), break

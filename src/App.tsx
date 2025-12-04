@@ -425,12 +425,8 @@ function App() {
           {step === 0 && (
             <div className="step-content fade-in">
               <h1>Robotic Motion Planning</h1>
-              <p className="subtitle">An Interactive Introduction</p>
-
               <div className="explanation">
-                <h3>Welcome</h3>
                 <p className="placeholder-text">
-                  <br />
                   Robotics is about movement under constraints. But how do we
                   get from A to B without hitting obstacle C? In this
                   interactive tutorial, we will explore an advanced algorithm
@@ -438,14 +434,14 @@ function App() {
                   RRT-connect.
                   <br />
                   <br />
-                  You don't need to know anything about robotics to learn this.
-                  This is a tutorial to build intuition using a multiple joint
-                  robot arm. The constraints are the number of joints, the
-                  angles that the joints can take and the length of the arms.
-                  We'll start with a simplistic approach "The Greedy Approach"
-                  and see a case where it fails. Then we'll explore RRT or
-                  Rapidly-exploring Random Tree and its more efficient variant
-                  RRT-Connect
+                  You don't need to know anything about robotics. This is a
+                  tutorial to build intuition using a multiple joint robot arm.
+                  The constraints are the number of joints, the angles that the
+                  joints can take and the length of the arms. <br />
+                  <br /> We'll start with a simplistic approach "The Greedy
+                  Approach" and see a case where it fails. Then we'll explore
+                  standard RRT (Rapidly-exploring Random Tree) and its more
+                  efficient variant RRT-Connect
                 </p>
               </div>
 
@@ -463,7 +459,6 @@ function App() {
               <h1>1. The Greedy Approach</h1>
               <div className="explanation">
                 <p className="placeholder-text">
-                  <br />
                   This uses the Cyclic Coordinate Descent algorithm. It is as if
                   each joint in the robot arm "looks" at the current position of
                   the tip of the robot and the target position where we want the
@@ -496,6 +491,7 @@ function App() {
                     obstacle.
                   </p>
                 </div>
+                <br />
                 <div className="callout-box action">
                   <strong>Try This Next</strong>
                   <p>
@@ -530,8 +526,7 @@ function App() {
 
           {step === 2 && (
             <div className="step-content fade-in">
-              <h1>2. Standard RRT</h1>
-              <p className="subtitle">Rapidly exploring Random Tree </p>
+              <h1>2. Standard RRT (Rapidly exploring Random Tree)</h1>
 
               <div className="explanation">
                 <p>
@@ -550,8 +545,8 @@ function App() {
                   <div className="callout-box action">
                     <strong>Try This Next</strong>
                     <p>
-                      Click "Run Planner" without changing the parameters
-                      initially.
+                      Click "Run Planner" without changing the parameters when
+                      doing it for the first time.
                     </p>
                   </div>
                   <div
@@ -706,17 +701,21 @@ function App() {
                     </strong>
                     <p>
                       Increase Step Size and Max Iterations. Can you get it to
-                      find the target? Notice how many nodes it needs. You can
-                      reset the robot and the target to starting positions on
-                      the right hand side.
+                      find the target? Notice how many nodes it needs.
                     </p>
                   </div>
                   <br />
-                  <b>Still Failing?</b> If after tuning parameters it still
-                  fails, Standard RRT's uniform random exploration may not be
-                  reaching the right regions of space within the time limit. The
-                  algorithm explores everywhere equally rather than focusing
-                  toward the goal.
+                  You can play around with the target and rerun the planner to
+                  see how the algorithm behaves in different scenarios. Note:
+                  you can reset the robot and the target to starting positions
+                  on the right hand side.
+                  <br />
+                  <br />
+                  <b>Still Failing to reach the target?</b> If after tuning
+                  parameters it still fails, Standard RRT's uniform random
+                  exploration may not be reaching the right regions of space
+                  within the time limit. The algorithm explores everywhere
+                  equally rather than focusing toward the goal.
                   <br />
                   <br />
                   Try adding a <b>Joint</b> (on the right hand side) as a final
@@ -744,8 +743,7 @@ function App() {
 
           {step === 3 && (
             <div className="step-content fade-in">
-              <h1>3. RRT-Connect</h1>
-              <p className="subtitle">Bi-directional Search</p>
+              <h1>3. Bi-directional RRT-Connect</h1>
 
               <div className="explanation">
                 <h3>Meeting in the Middle</h3>
@@ -754,25 +752,26 @@ function App() {
                   standard RRT.
                   <br />
                   <br />
-                  The algo grows <b>two trees</b>: one from the start, one from
-                  the goal. They aggressively try to meet in the middle.
+                  The algorithm grows <b>two trees</b>: one from the start, one
+                  from the goal. They aggressively try to meet in the middle.
                   <br />
                   <br />
-                  Each tree takes turns. One takes a step toward a random point
-                  and the other one "looks" at where the new extension is and
-                  tries to extend its nearest node to it. Next, they swap roles
-                  and redo the same process.
+                  Each tree takes turns in doing this: One tree takes a step
+                  toward a random point and the other tree "looks" at where the
+                  new extension is and tries to extend its nearest node to it.
+                  Next, they swap roles and redo the same process.
                   <br />
                   <br />
                   <span>
                     This random turn-by-turn step and connect interplay might
                     seem chaotic but it is actually very efficient.
                   </span>
+                  <br />
                 </p>
 
                 {tutorialMode && (
                   <div className="callout-box action">
-                    <strong>Fair Comparison Mode</strong>
+                    <strong>Try This</strong>
                     <p>
                       Click <b>"Run Comparison"</b> to see both algorithms
                       side-by-side with identical parameters. Standard RRT runs
@@ -893,14 +892,6 @@ function App() {
                       : 'To see a comparison, first run Standard RRT in step 2, then return here.'}
                   </p>
                 )}
-              </div>
-
-              <div className="callout-box notice">
-                <strong>What to Notice</strong>
-                <p>
-                  Two trees grow toward each other - much more directed! Compare
-                  the node count and time to Standard RRT.
-                </p>
               </div>
 
               <div className="controls-section">
@@ -1041,6 +1032,14 @@ function App() {
                   {(comparisonPhase === 'idle' || comparisonPhase === 'done') &&
                     (tutorialMode ? '▶ Run Comparison' : '▶ Run Planner')}
                 </button>
+              </div>
+
+              <div className="callout-box notice">
+                <strong>What to Notice</strong>
+                <p>
+                  Two trees grow toward each other - much more directed! Compare
+                  the node count and time to Standard RRT.
+                </p>
               </div>
             </div>
           )}
@@ -1525,74 +1524,119 @@ function App() {
         </div>
       </div>
 
-      {/* Status Bar - Horizontal bar at bottom showing stats and failure feedback */}
-      {((step === 1 && stats && !stats.success) || step >= 2) && stats && (
-        <div className="status-bar fade-in">
-          {/* Stats Section - Only show for RRT steps (2+), not Greedy */}
-          {step >= 2 && (
-            <div className="status-bar-stats">
-              <div className="status-item">
-                <span className="status-label">Status</span>
-                <span
-                  className={`status-value ${
-                    stats.success ? 'success' : 'error'
-                  }`}
-                >
-                  {stats.success
-                    ? 'CONVERGED'
-                    : stats.time > 0
-                    ? 'FAILED'
-                    : 'PLANNING'}
-                </span>
-              </div>
-              <div className="status-item">
-                <span className="status-label">Time</span>
-                <span className="status-value">{stats.time} ms</span>
-              </div>
-              <div className="status-item">
-                <span className="status-label">Nodes</span>
-                <span className="status-value">{stats.nodes}</span>
-              </div>
+      {/* Bottom HUD Container - Stats, Legend, and Controls */}
+      <div className="bottom-hud">
+        {/* Top row: Status Bar + Tree Legend side by side */}
+        <div className="bottom-hud-row">
+          {/* Status Bar - Shows stats and failure feedback */}
+          {((step === 1 && stats && !stats.success) || step >= 2) && stats && (
+            <div className="status-bar fade-in">
+              {/* Stats Section - Only show for RRT steps (2+), not Greedy */}
+              {step >= 2 && (
+                <div className="status-bar-stats">
+                  <div className="status-item">
+                    <span className="status-label">Status</span>
+                    <span
+                      className={`status-value ${
+                        stats.success ? 'success' : 'error'
+                      }`}
+                    >
+                      {stats.success
+                        ? 'CONVERGED'
+                        : stats.time > 0
+                        ? 'FAILED'
+                        : 'PLANNING'}
+                    </span>
+                  </div>
+                  <div className="status-item">
+                    <span className="status-label">Time</span>
+                    <span className="status-value">{stats.time} ms</span>
+                  </div>
+                  <div className="status-item">
+                    <span className="status-label">Nodes</span>
+                    <span className="status-value">{stats.nodes}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Failure Feedback Section */}
+              {!stats.success && stats.failureReason && (
+                <div className="status-bar-feedback">
+                  <div className="feedback-reason">
+                    <span className="feedback-icon">!</span>
+                    <span className="feedback-message">
+                      {getFailureFeedback(
+                        stats.failureReason,
+                        stats.isGreedy,
+                        step
+                      )?.message || 'Planning failed'}
+                    </span>
+                  </div>
+                  <div className="feedback-suggestions">
+                    <span className="suggestions-label">Try:</span>
+                    {getFailureFeedback(
+                      stats.failureReason,
+                      stats.isGreedy,
+                      step
+                    )?.suggestions.map((s, i) => (
+                      <span key={i} className="suggestion-chip">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Failure Feedback Section */}
-          {!stats.success && stats.failureReason && (
-            <div className="status-bar-feedback">
-              <div className="feedback-reason">
-                <span className="feedback-icon">!</span>
-                <span className="feedback-message">
-                  {getFailureFeedback(stats.failureReason, stats.isGreedy, step)
-                    ?.message || 'Planning failed'}
-                </span>
-              </div>
-              <div className="feedback-suggestions">
-                <span className="suggestions-label">Try:</span>
-                {getFailureFeedback(
-                  stats.failureReason,
-                  stats.isGreedy,
-                  step
-                )?.suggestions.map((s, i) => (
-                  <span key={i} className="suggestion-chip">
-                    {s}
-                  </span>
-                ))}
+          {/* Tree Legend - Only visible in RRT-Connect step */}
+          {step === 3 && (
+            <div className="tree-legend fade-in">
+              <span className="legend-title">RRT-Connect</span>
+              <div className="legend-items">
+                <div className="legend-item">
+                  <span
+                    className="legend-line"
+                    style={{ background: '#55ff55' }}
+                  />
+                  <span style={{ color: '#55ff55' }}>Start Tree</span>
+                </div>
+                <div className="legend-item">
+                  <span
+                    className="legend-line"
+                    style={{ background: '#55aaff' }}
+                  />
+                  <span style={{ color: '#55aaff' }}>Goal Tree</span>
+                </div>
+                {showComparison && (
+                  <>
+                    <span className="legend-separator">│</span>
+                    <div className="legend-item">
+                      <span
+                        className="legend-line"
+                        style={{ background: '#ff5555' }}
+                      />
+                      <span style={{ color: '#ff5555' }}>Std RRT</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
         </div>
-      )}
 
-      <div className="controls-help fade-in">
-        <span>
-          <span className="key">LMB</span> Rotate
-        </span>
-        <span>
-          <span className="key">RMB</span> Pan
-        </span>
-        <span>
-          <span className="key">Scroll</span> Zoom
-        </span>
+        {/* Controls Help */}
+        <div className="controls-help fade-in">
+          <span>
+            <span className="key">LMB</span> Rotate
+          </span>
+          <span>
+            <span className="key">RMB</span> Pan
+          </span>
+          <span>
+            <span className="key">Scroll</span> Zoom
+          </span>
+        </div>
       </div>
     </div>
   )

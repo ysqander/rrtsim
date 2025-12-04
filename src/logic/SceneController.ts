@@ -46,6 +46,15 @@ export class SceneController {
   private currentObstaclePreset: 'wall' | 'inverted_u' | 'corridor' = 'wall'
   private editingTarget: boolean = true // true = editing target, false = editing obstacles
 
+  // Floor constraint constants
+  // FLOOR_Y: The top surface of the floor collision box.
+  //   Must account for collision margins AND allow robot to reach ground-level targets.
+  //   Set conservatively low to avoid false positives while still preventing underground paths.
+  // MIN_TARGET_Y: Minimum Y position for the target (accounts for arm thickness)
+  private static readonly FLOOR_Y = -1.0
+  private static readonly MIN_TARGET_Y = 0.15
+  private static readonly FLOOR_HALF_EXTENT = 50
+
   // State
   private plannedPath: number[][] = []
   private pathIndex = 0
@@ -182,6 +191,11 @@ export class SceneController {
 
     // Live Ghost Update while dragging - ONLY in RRT mode if desired, or Greedy mode live update
     this.transformControl.addEventListener('change', () => {
+      // Clamp target Y to prevent placing it below the floor
+      if (this.targetMesh.position.y < SceneController.MIN_TARGET_Y) {
+        this.targetMesh.position.y = SceneController.MIN_TARGET_Y
+      }
+
       if (this.onTargetMove) {
         this.onTargetMove({
           x: this.targetMesh.position.x,
@@ -381,9 +395,11 @@ export class SceneController {
   }
 
   public setTargetPosition(x: number, y: number, z: number) {
-    this.targetMesh.position.set(x, y, z)
+    // Clamp Y to prevent placing target below the floor
+    const clampedY = Math.max(y, SceneController.MIN_TARGET_Y)
+    this.targetMesh.position.set(x, clampedY, z)
     if (this.onTargetMove) {
-      this.onTargetMove({ x, y, z })
+      this.onTargetMove({ x, y: clampedY, z })
     }
     if (this.algorithm === 'greedy') {
       this.runPlanner()
@@ -546,8 +562,8 @@ export class SceneController {
       }, 500)
     }
 
-    // 1. Visualize Tree from serialized data
-    this.visualizeSearchTreeFromData(result.treeData)
+    // 1. Visualize Tree from serialized data (with dual coloring for RRT-Connect)
+    this.visualizeSearchTreeFromData(result.treeData, result.startNodes)
 
     // 2. Report Stats to React (including failure reason and bidirectional stats)
     if (this.onStatsUpdate) {
@@ -572,7 +588,11 @@ export class SceneController {
   }
 
   // Visualize tree from serialized worker data
-  private visualizeSearchTreeFromData(treeData: SerializedNode[]) {
+  // startNodes: Number of nodes in the start tree (for RRT-Connect dual coloring)
+  private visualizeSearchTreeFromData(
+    treeData: SerializedNode[],
+    startNodes?: number
+  ) {
     // 1. CLEANUP: Remove old mesh
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)
@@ -597,9 +617,14 @@ export class SceneController {
 
     if (!treeData || treeData.length === 0) return
 
-    // 2. GENERATE LINES (The Branches)
+    // 2. GENERATE LINES (The Branches) with vertex colors for dual-tree visualization
     const points: THREE.Vector3[] = []
+    const colors: number[] = [] // RGB values for vertex colors
     const limit = Math.min(treeData.length, 20000)
+
+    // Colors for RRT-Connect trees
+    const startTreeColor = { r: 0x55 / 255, g: 0xff / 255, b: 0x55 / 255 } // Green
+    const goalTreeColor = { r: 0x55 / 255, g: 0xaa / 255, b: 0xff / 255 } // Cyan/Blue
 
     for (let i = 0; i < limit; i++) {
       const node = treeData[i]
@@ -616,15 +641,34 @@ export class SceneController {
 
       points.push(startPos)
       points.push(endPos)
+
+      // Determine color based on whether this node is in start tree or goal tree
+      // In RRT-Connect, lastTrees = [...startTree, ...goalTree]
+      const isStartTree = !startNodes || i < startNodes
+      const color = isStartTree ? startTreeColor : goalTreeColor
+
+      // Each line segment has 2 vertices, both get the same color
+      colors.push(color.r, color.g, color.b)
+      colors.push(color.r, color.g, color.b)
     }
 
     console.log(
-      `[SceneController] Visualizing Tree from worker: ${treeData.length} nodes, ${points.length} vertices`
+      `[SceneController] Visualizing Tree from worker: ${treeData.length} nodes, ${points.length} vertices` +
+        (startNodes
+          ? ` (Start: ${startNodes}, Goal: ${treeData.length - startNodes})`
+          : '')
     )
 
     const lineGeo = new THREE.BufferGeometry().setFromPoints(points)
+
+    // Add vertex colors for dual-tree coloring
+    if (startNodes && colors.length > 0) {
+      lineGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+    }
+
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0x55ff55,
+      color: startNodes ? 0xffffff : 0x55ff55, // White when using vertex colors, green otherwise
+      vertexColors: !!startNodes, // Enable vertex colors for RRT-Connect
       transparent: true,
       opacity: 0.6,
       depthWrite: false,
@@ -633,19 +677,36 @@ export class SceneController {
     this.treeMesh = new THREE.LineSegments(lineGeo, lineMat)
     this.treeMesh.geometry.setDrawRange(0, 0) // Start hidden for animation
 
-    // 3. GENERATE POINTS (The Nodes)
+    // 3. GENERATE POINTS (The Nodes) with dual coloring
     if (treeData.length < 5000) {
       const dotPoints: THREE.Vector3[] = []
+      const dotColors: number[] = []
+
       for (let i = 0; i < limit; i++) {
         const node = treeData[i]
         if (node) {
           dotPoints.push(this.robot.getTipPosition(node.angles))
+
+          // Match dot color to tree
+          const isStartTree = !startNodes || i < startNodes
+          const color = isStartTree ? startTreeColor : goalTreeColor
+          dotColors.push(color.r, color.g, color.b)
         }
       }
 
       const dotGeo = new THREE.BufferGeometry().setFromPoints(dotPoints)
+
+      // Add vertex colors for dots
+      if (startNodes && dotColors.length > 0) {
+        dotGeo.setAttribute(
+          'color',
+          new THREE.Float32BufferAttribute(dotColors, 3)
+        )
+      }
+
       const dotMat = new THREE.PointsMaterial({
-        color: 0xccffcc,
+        color: startNodes ? 0xffffff : 0xccffcc,
+        vertexColors: !!startNodes,
         size: 0.04,
         transparent: true,
         opacity: 0.5,
@@ -774,9 +835,12 @@ export class SceneController {
       const sol = this.robot.calculateIK(this.targetMesh.position)
       this.robot.setAngles(sol)
 
-      // Check collision types
+      // Check collision types (including floor constraint)
       const selfCollision = this.robot.checkSelfCollision(sol)
-      const obstacleCollision = this.robot.checkCollision(sol, this.obstacle)
+      const obstacleCollision = this.robot.checkCollision(
+        sol,
+        this.getAllObstaclesAsBox3()
+      )
       const hit = selfCollision || obstacleCollision
 
       // Visual Feedback for Hit
@@ -1004,8 +1068,11 @@ export class SceneController {
         params: connectParams,
       })
 
-      // Visualize RRT-Connect tree (green)
-      this.visualizeSearchTreeFromData(connectResult.treeData)
+      // Visualize RRT-Connect tree (green start tree + cyan goal tree)
+      this.visualizeSearchTreeFromData(
+        connectResult.treeData,
+        connectResult.startNodes
+      )
 
       // Report RRT-Connect stats
       if (this.onStatsUpdate) {
@@ -1103,8 +1170,8 @@ export class SceneController {
       }, 500)
     }
 
-    // Visualize Tree (using old method for main thread planner)
-    this.visualizeSearchTree()
+    // Visualize Tree (using old method for main thread planner, with dual coloring for RRT-Connect)
+    this.visualizeSearchTree(result.startNodes)
 
     if (this.onStatsUpdate) {
       this.onStatsUpdate({
@@ -1114,6 +1181,9 @@ export class SceneController {
         failureReason: result.failureReason,
         failureDetails: result.failureDetails,
         isGreedy: false,
+        startNodes: result.startNodes,
+        goalNodes: result.goalNodes,
+        meetIteration: result.meetIteration,
       })
     }
 
@@ -1123,7 +1193,9 @@ export class SceneController {
     }
   }
 
-  private visualizeSearchTree() {
+  // Main-thread tree visualization with dual coloring support
+  // startNodes: Number of nodes in the start tree (for RRT-Connect dual coloring)
+  private visualizeSearchTree(startNodes?: number) {
     // 1. CLEANUP: Remove old mesh to prevent memory leaks and visual artifacts
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)
@@ -1151,9 +1223,14 @@ export class SceneController {
     const tree = this.planner.lastTrees
     if (!tree || tree.length === 0) return
 
-    // 2. GENERATE LINES (The Branches)
+    // 2. GENERATE LINES (The Branches) with vertex colors for dual-tree visualization
     const points: THREE.Vector3[] = []
+    const colors: number[] = [] // RGB values for vertex colors
     const limit = Math.min(tree.length, 20000) // Safety cap
+
+    // Colors for RRT-Connect trees
+    const startTreeColor = { r: 0x55 / 255, g: 0xff / 255, b: 0x55 / 255 } // Green
+    const goalTreeColor = { r: 0x55 / 255, g: 0xaa / 255, b: 0xff / 255 } // Cyan/Blue
 
     for (let i = 1; i < limit; i++) {
       const node = tree[i]
@@ -1169,15 +1246,33 @@ export class SceneController {
 
       points.push(startPos)
       points.push(endPos)
+
+      // Determine color based on whether this node is in start tree or goal tree
+      const isStartTree = !startNodes || i < startNodes
+      const color = isStartTree ? startTreeColor : goalTreeColor
+
+      // Each line segment has 2 vertices, both get the same color
+      colors.push(color.r, color.g, color.b)
+      colors.push(color.r, color.g, color.b)
     }
 
     console.log(
-      `[SceneController] Visualizing Tree: ${tree.length} nodes, ${points.length} vertices`
+      `[SceneController] Visualizing Tree: ${tree.length} nodes, ${points.length} vertices` +
+        (startNodes
+          ? ` (Start: ${startNodes}, Goal: ${tree.length - startNodes})`
+          : '')
     )
 
     const lineGeo = new THREE.BufferGeometry().setFromPoints(points)
+
+    // Add vertex colors for dual-tree coloring
+    if (startNodes && colors.length > 0) {
+      lineGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+    }
+
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0x55ff55, // Brighter Green
+      color: startNodes ? 0xffffff : 0x55ff55, // White when using vertex colors, green otherwise
+      vertexColors: !!startNodes, // Enable vertex colors for RRT-Connect
       transparent: true,
       opacity: 0.6, // Much more visible (was 0.15)
       depthWrite: false,
@@ -1186,21 +1281,38 @@ export class SceneController {
     this.treeMesh = new THREE.LineSegments(lineGeo, lineMat)
     this.treeMesh.geometry.setDrawRange(0, 0) // Start hidden for animation
 
-    // 3. GENERATE POINTS (The Nodes)
+    // 3. GENERATE POINTS (The Nodes) with dual coloring
     // This adds a "Point Cloud" effect which makes the search volume look solid
     // We only generate dots if performance allows (e.g., < 5000 nodes)
     if (tree.length < 5000) {
       const dotPoints: THREE.Vector3[] = []
+      const dotColors: number[] = []
+
       for (let i = 0; i < limit; i++) {
         const node = tree[i]
         if (node) {
           dotPoints.push(this.robot.getTipPosition(node.angles))
+
+          // Match dot color to tree
+          const isStartTree = !startNodes || i < startNodes
+          const color = isStartTree ? startTreeColor : goalTreeColor
+          dotColors.push(color.r, color.g, color.b)
         }
       }
 
       const dotGeo = new THREE.BufferGeometry().setFromPoints(dotPoints)
+
+      // Add vertex colors for dots
+      if (startNodes && dotColors.length > 0) {
+        dotGeo.setAttribute(
+          'color',
+          new THREE.Float32BufferAttribute(dotColors, 3)
+        )
+      }
+
       const dotMat = new THREE.PointsMaterial({
-        color: 0xccffcc, // Slightly paler green for dots
+        color: startNodes ? 0xffffff : 0xccffcc, // White when using vertex colors
+        vertexColors: !!startNodes,
         size: 0.04, // Small nodes
         transparent: true,
         opacity: 0.5,
@@ -1399,6 +1511,65 @@ export class SceneController {
         })
       }
     })
+
+    // Add floor as a collision plane to prevent robot from going underground
+    // This is a large box extending below y=0 that covers the entire workspace
+    const floorBox = {
+      min: [
+        -SceneController.FLOOR_HALF_EXTENT,
+        -10,
+        -SceneController.FLOOR_HALF_EXTENT,
+      ] as [number, number, number],
+      max: [
+        SceneController.FLOOR_HALF_EXTENT,
+        SceneController.FLOOR_Y,
+        SceneController.FLOOR_HALF_EXTENT,
+      ] as [number, number, number],
+    }
+    boxes.push(floorBox)
+
+    return boxes
+  }
+
+  /**
+   * Get all obstacles as THREE.Box3 objects for main-thread collision checking.
+   * This includes user obstacles, obstacle groups, and the floor plane.
+   */
+  private getAllObstaclesAsBox3(): THREE.Box3[] {
+    const boxes: THREE.Box3[] = []
+
+    // Include main obstacle if it's visible (y > -5)
+    if (this.obstacle.position.y > -5) {
+      boxes.push(new THREE.Box3().setFromObject(this.obstacle))
+    }
+
+    // Include extra obstacles
+    for (const mesh of this.extraObstacles) {
+      boxes.push(new THREE.Box3().setFromObject(mesh))
+    }
+
+    // Include all meshes from the obstacle group (with world transforms)
+    this.obstacleGroup.updateMatrixWorld(true)
+    this.obstacleGroup.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) {
+        boxes.push(new THREE.Box3().setFromObject(child))
+      }
+    })
+
+    // Add floor as a collision plane
+    const floorBox = new THREE.Box3(
+      new THREE.Vector3(
+        -SceneController.FLOOR_HALF_EXTENT,
+        -10,
+        -SceneController.FLOOR_HALF_EXTENT
+      ),
+      new THREE.Vector3(
+        SceneController.FLOOR_HALF_EXTENT,
+        SceneController.FLOOR_Y,
+        SceneController.FLOOR_HALF_EXTENT
+      )
+    )
+    boxes.push(floorBox)
 
     return boxes
   }
