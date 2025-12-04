@@ -1,5 +1,7 @@
 - What do the Hitboxes show at the moment. seems like gibberish.
-- Run the calcs in "worker" to avoid crashing when people stress test it.
+- need t orethink how to set up a more complex case for 3. RRT connect. The obstacles my be to narrow.
+- For movable obstacle: need to refine default paramters for case and check whether can animate or color code both trees separately to show
+  bi-directional neture"
 
 Improvements for learning outcomes and UX
 Bold gating per step
