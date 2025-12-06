@@ -1,73 +1,55 @@
-# React + TypeScript + Vite
+# Robotic Path Planning Visualizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Created by Alex Adamov**
 
-Currently, two official plugins are available:
+An interactive, 3D educational tool for understanding how robots plan movement around obstacles.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Background
 
-## React Compiler
+I started learning about robotic algorithms with Gemini 3. I initially built the physics and logic engine for my own understanding, but as it came together, I decided to create an interactive tutorial to share these concepts with others.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## What Does This App Do?
 
-## Expanding the ESLint configuration
+Imagine you have a robot arm and you want it to grab an object behind a wall. You can't just move straight there—the arm would hit the wall. You need to figure out a path that snakes "around" the obstacles.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+This application visualizes how computers solve this problem. It takes you through a journey from naive approaches that fail, to advanced "tree-growing" algorithms used in real-world robotics (like self-driving cars and industrial automation) that can explore complex spaces to find a safe path.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## How It Works
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+The app creates a 3D simulation of a multi-jointed robot arm. You can define obstacles (walls, gates, corridors) and a target position. The app then visualizes three different strategies for reaching that target:
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+1.  **The Greedy Approach (Cyclic Coordinate Descent)**:
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+    - **Concept**: "Move every joint to get closer to the target right now."
+    - **Result**: It works great in open space but fails miserably with obstacles. It gets stuck trying to go "through" a wall because it never thinks to go "around" it.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+2.  **Standard RRT (Rapidly-exploring Random Tree)**:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+    - **Concept**: "Let's explore blindly." The robot randomly samples a point in space and tries to extend a branch toward it. Over time, it builds a massive "tree" of safe movements.
+    - **Result**: It eventually finds a path, but it's slow and explores the entire room just to move a few inches.
+
+3.  **RRT-Connect (Bi-directional)**:
+    - **Concept**: "Let's meet in the middle." One tree grows from the start, and another grows backward from the goal. They aggressively try to connect to each other.
+    - **Result**: Much faster and more efficient. This is the industry-standard approach for many motion planning problems.
+
+### Technical Details
+
+The project is built with:
+
+- **React**: For the UI and state management.
+- **Three.js**: For the 3D rendering and simulation environment.
+- **Web Workers**: To run the heavy RRT calculations off the main thread, keeping the UI smooth even while calculating thousands of path nodes.
+
+## Contributing
+
+This is an open educational project. I invite comments, additions, and improvements! Whether it's adding new algorithms (like RRT\* or PRM), improving the visualization, or fixing bugs, your contributions are welcome.
+
+## Support
+
+If you found this useful or interesting, you can show your appreciation!
+
+<a href="https://www.buymeacoffee.com/yourusername" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

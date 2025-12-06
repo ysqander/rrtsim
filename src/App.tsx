@@ -538,7 +538,7 @@ function App() {
 
           {step === 0 && (
             <div className="step-content fade-in">
-              <h1>Robotic Motion Planning</h1>
+              <h1>RRTsim: Robotic Motion Planning</h1>
               <div className="explanation">
                 <p className="placeholder-text">
                   Robotics is about movement under constraints. But how do we
@@ -908,7 +908,8 @@ function App() {
                       Click <b>"Run Comparison"</b> to see both algorithms
                       side-by-side with identical parameters. Standard RRT runs
                       first, then RRT-Connect - so you get a true
-                      apples-to-apples comparison.
+                      apples-to-apples comparison. Once you run it, you can hide
+                      or show the path trees on the right hand side)
                     </p>
                   </div>
                 )}
@@ -1236,7 +1237,7 @@ function App() {
                 }}
               />
               <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
-                Show RRT-connect Search Trees
+                Show RRT-connect search trees
               </span>
             </label>
             <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
@@ -1260,7 +1261,7 @@ function App() {
                     }}
                   />
                   <span style={{ color: showComparison ? '#2ecc71' : '#aaa' }}>
-                    Show Comparison with Std RRT
+                    Show comparison with Std RRT
                   </span>
                 </label>
                 <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
@@ -1381,6 +1382,8 @@ function App() {
                   controllerRef.current?.setObstaclePreset('wall', wallDims)
                   const pos = controllerRef.current?.getObstaclePosition()
                   if (pos) setObstaclePos(pos)
+                  const rot = controllerRef.current?.getObstacleRotation()
+                  if (rot !== undefined) setObstacleRotation(rot)
                 }}
                 title="Simple vertical wall"
               >
@@ -1396,6 +1399,8 @@ function App() {
                   )
                   const pos = controllerRef.current?.getObstaclePosition()
                   if (pos) setObstaclePos(pos)
+                  const rot = controllerRef.current?.getObstacleRotation()
+                  if (rot !== undefined) setObstacleRotation(rot)
                 }}
                 title="Two pillars with top bar (gate)"
               >
@@ -1411,6 +1416,8 @@ function App() {
                   )
                   const pos = controllerRef.current?.getObstaclePosition()
                   if (pos) setObstaclePos(pos)
+                  const rot = controllerRef.current?.getObstacleRotation()
+                  if (rot !== undefined) setObstacleRotation(rot)
                 }}
                 title="Narrow corridor"
               >
