@@ -93,7 +93,6 @@ export class SceneController {
 
   // Comparison mode state
   private isComparisonMode = false
-  private _comparisonResolve: ((result: WorkerOutput) => void) | null = null // Stored for potential cancellation
 
   constructor(canvas: HTMLCanvasElement) {
     // 1. Setup ThreeJS
@@ -342,11 +341,7 @@ export class SceneController {
     const startPolarRad = (startPolarDeg * Math.PI) / 180
 
     // Calculate starting position in spherical coordinates
-    const startX =
-      startZoom * Math.sin(startPolarRad) * Math.sin(startAzimuthRad)
     const startY = startZoom * Math.cos(startPolarRad)
-    const startZ =
-      startZoom * Math.sin(startPolarRad) * Math.cos(startAzimuthRad)
 
     // Full 360 degree orbit from the starting azimuth
     const endAngle = startAzimuthRad + Math.PI * 2
@@ -1262,13 +1257,11 @@ export class SceneController {
       }
 
       this.isWorkerPlanning = true
-      this._comparisonResolve = resolve
 
       // Temporarily override the worker message handler
       const originalHandler = this.worker.onmessage
       this.worker.onmessage = (e: MessageEvent<WorkerOutput>) => {
         this.isWorkerPlanning = false
-        this._comparisonResolve = null
         // Restore original handler
         if (this.worker) {
           this.worker.onmessage = originalHandler

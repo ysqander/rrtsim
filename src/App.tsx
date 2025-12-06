@@ -228,7 +228,8 @@ function App() {
     window.addEventListener('resize', onResize)
 
     return () => window.removeEventListener('resize', onResize)
-  }, []) // One-time init
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // One-time init - dependencies intentionally omitted
 
   // Update the stats callback whenever step changes to capture context
   useEffect(() => {
