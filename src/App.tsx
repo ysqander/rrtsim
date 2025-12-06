@@ -114,10 +114,16 @@ function App() {
   const [tutorialMode, setTutorialMode] = useState(true)
   // Auto-Swivel: Automatically orbit camera after running planner (once, then auto-disables)
   const [autoSwivel, setAutoSwivel] = useState(true)
+  // Auto-Swivel for RRT-Connect tab (same concept, separate state)
+  const [autoSwivelConnect, setAutoSwivelConnect] = useState(true)
   // Show comparison with Standard RRT in step 3 (requires running Std RRT first in step 2)
   const [showComparison, setShowComparison] = useState(true)
   // Show/hide RRT trees in steps 2 and 3
   const [showTree, setShowTree] = useState(true)
+  // Show visual guide (arrow + highlight) pointing to tree toggle after first planner run
+  const [showTreeToggleGuide, setShowTreeToggleGuide] = useState(false)
+  // Show visual guide pointing to comparison toggle (RRT-Connect only)
+  const [showComparisonGuide, setShowComparisonGuide] = useState(false)
   // Track if planner is currently running (for Step 2 button UI)
   const [isPlanning, setIsPlanning] = useState(false)
 
@@ -390,7 +396,7 @@ function App() {
         controllerRef.current.setCameraZoom(11.5)
         controllerRef.current.setCameraAngle(32, 67)
 
-        // Update React state to match these defaults (syncs UI sliders)
+        // Update React state to match (syncs UI sliders)
         setCameraZoom(11.5)
         setCameraAzimuth(32)
         setCameraPolar(67)
@@ -408,6 +414,34 @@ function App() {
       controllerRef.current.updateRRTParams(rrtParams)
     }
   }, [rrtParams, step])
+
+  // 4. Auto-swivel for RRT-Connect after comparison completes
+  useEffect(() => {
+    if (comparisonPhase === 'done' && autoSwivelConnect && step === 3) {
+      // Trigger the "Swivel" animation to show off the scene
+      setTimeout(() => {
+        controllerRef.current?.animateCameraConnectIntro()
+      }, 500) // Wait 0.5s for trees to finish rendering
+      // Auto-disable after first use
+      setAutoSwivelConnect(false)
+      // Show tree toggle guide after camera animation completes
+      setTimeout(() => {
+        setShowTreeToggleGuide(true)
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => {
+          setShowTreeToggleGuide(false)
+        }, 5000)
+      }, 3500) // Wait for 0.5s + 3s camera animation
+      // Show comparison toggle guide (slightly delayed for visual clarity)
+      setTimeout(() => {
+        setShowComparisonGuide(true)
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => {
+          setShowComparisonGuide(false)
+        }, 5000)
+      }, 4000) // Start 0.5s after tree guide
+    }
+  }, [comparisonPhase, autoSwivelConnect, step])
 
   // Handlers
   const handleStepChange = (newStep: 0 | 1 | 2 | 3) => {
@@ -805,6 +839,14 @@ function App() {
                         }, 1000) // Wait 1s for tree to start appearing
                         // Auto-disable after first use
                         setAutoSwivel(false)
+                        // Show tree toggle guide after camera animation completes
+                        setTimeout(() => {
+                          setShowTreeToggleGuide(true)
+                          // Auto-dismiss after 5 seconds
+                          setTimeout(() => {
+                            setShowTreeToggleGuide(false)
+                          }, 5000)
+                        }, 4000) // Wait for 1s + 3s camera animation
                       }
                     }}
                     disabled={isPlanning}
@@ -1223,10 +1265,22 @@ function App() {
             <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
               <input
                 type="checkbox"
-                checked={autoSwivel}
-                onChange={() => setAutoSwivel(!autoSwivel)}
+                checked={step === 3 ? autoSwivelConnect : autoSwivel}
+                onChange={() => {
+                  if (step === 3) {
+                    setAutoSwivelConnect(!autoSwivelConnect)
+                  } else {
+                    setAutoSwivel(!autoSwivel)
+                  }
+                }}
               />
-              <span style={{ color: autoSwivel ? '#2ecc71' : '#aaa' }}>
+              <span
+                style={{
+                  color: (step === 3 ? autoSwivelConnect : autoSwivel)
+                    ? '#2ecc71'
+                    : '#aaa',
+                }}
+              >
                 Auto-Swivel Camera
               </span>
             </label>
@@ -1235,45 +1289,60 @@ function App() {
               use).
             </p>
 
-            <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
-              <input
-                type="checkbox"
-                checked={showTree}
-                onChange={(e) => {
-                  setShowTree(e.target.checked)
-                  controllerRef.current?.setTreeVisible(e.target.checked)
-                }}
-              />
-              <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
-                {step === 3
-                  ? 'Show/hide RRT-connect search trees'
-                  : 'Show/hide RRT search tree'}
-              </span>
-            </label>
+            <div style={{ position: 'relative' }}>
+              {showTreeToggleGuide && <div className="guide-arrow">↓</div>}
+              <label
+                className={`toggle-row ${
+                  showTreeToggleGuide ? 'tree-toggle-highlight' : ''
+                }`}
+                style={{ marginBottom: '0.5rem' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showTree}
+                  onChange={(e) => {
+                    setShowTree(e.target.checked)
+                    controllerRef.current?.setTreeVisible(e.target.checked)
+                  }}
+                />
+                <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
+                  {step === 3
+                    ? 'Show/hide RRT-connect search trees'
+                    : 'Show/hide RRT search tree'}
+                </span>
+              </label>
+            </div>
             <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
               Display RRT exploration tree visualization.
             </p>
 
             {step === 3 && (
               <>
-                <label
-                  className="toggle-row"
-                  style={{ marginBottom: '0.5rem' }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showComparison}
-                    onChange={(e) => {
-                      setShowComparison(e.target.checked)
-                      controllerRef.current?.setGhostTreeVisible(
-                        e.target.checked
-                      )
-                    }}
-                  />
-                  <span style={{ color: showComparison ? '#2ecc71' : '#aaa' }}>
-                    Show comparison with Std RRT
-                  </span>
-                </label>
+                <div style={{ position: 'relative' }}>
+                  {showComparisonGuide && <div className="guide-arrow">↓</div>}
+                  <label
+                    className={`toggle-row ${
+                      showComparisonGuide ? 'tree-toggle-highlight' : ''
+                    }`}
+                    style={{ marginBottom: '0.5rem' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showComparison}
+                      onChange={(e) => {
+                        setShowComparison(e.target.checked)
+                        controllerRef.current?.setGhostTreeVisible(
+                          e.target.checked
+                        )
+                      }}
+                    />
+                    <span
+                      style={{ color: showComparison ? '#2ecc71' : '#aaa' }}
+                    >
+                      Show comparison with Std RRT
+                    </span>
+                  </label>
+                </div>
                 <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
                   Display Standard RRT ghost tree for comparison.
                 </p>

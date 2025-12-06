@@ -343,10 +343,10 @@ export class SceneController {
     // Calculate starting position in spherical coordinates
     const startY = startZoom * Math.cos(startPolarRad)
 
-    // Full 360 degree orbit from the starting azimuth
-    const endAngle = startAzimuthRad + Math.PI * 2
+    // 90 degree orbit from the starting azimuth
+    const endAngle = startAzimuthRad + Math.PI / 2
 
-    const duration = 8000 // 8 seconds
+    const duration = 3000 // 3 seconds
     const start = performance.now()
 
     const orbit = () => {
@@ -364,6 +364,54 @@ export class SceneController {
 
       if (t < 1) {
         requestAnimationFrame(orbit)
+      }
+    }
+    orbit()
+  }
+
+  public animateCameraConnectIntro() {
+    // RRT-Connect intro: 90 degree sweep ending at the default Connect view
+    // End position: Zoom: 11.5, Azimuth: 32°, Polar: 67°
+    const endZoom = 11.5
+    const endAzimuthDeg = 32
+    const endPolarDeg = 67
+
+    // Start 90 degrees before the end azimuth
+    const startAzimuthDeg = endAzimuthDeg - 90
+
+    // Convert to radians
+    const startAzimuthRad = (startAzimuthDeg * Math.PI) / 180
+    const endAzimuthRad = (endAzimuthDeg * Math.PI) / 180
+    const polarRad = (endPolarDeg * Math.PI) / 180
+
+    // Calculate Y position (constant during orbit)
+    const y = endZoom * Math.cos(polarRad)
+    const horizontalRadius = endZoom * Math.sin(polarRad)
+
+    const duration = 3000 // 3 seconds
+    const start = performance.now()
+
+    // Disable controls during animation to prevent interference
+    this.controls.enabled = false
+
+    const orbit = () => {
+      const now = performance.now()
+      const t = Math.min((now - start) / duration, 1)
+      // Ease out cubic for smooth deceleration
+      const ease = 1 - Math.pow(1 - t, 3)
+
+      const angle = startAzimuthRad + (endAzimuthRad - startAzimuthRad) * ease
+      const x = horizontalRadius * Math.sin(angle)
+      const z = horizontalRadius * Math.cos(angle)
+
+      this.camera.position.set(x, y, z)
+      this.camera.lookAt(0, 1, 0)
+
+      if (t < 1) {
+        requestAnimationFrame(orbit)
+      } else {
+        // Re-enable controls after animation completes
+        this.controls.enabled = true
       }
     }
     orbit()
