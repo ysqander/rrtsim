@@ -146,8 +146,8 @@ export class Robot {
   // Joint/arm thickness scale factor (0.3 = default for thin robot)
   private jointScale: number = 0.3
 
-  // Tip (end effector) scale factor (0.3 = default for small tip)
-  private tipScale: number = 0.3
+  // Tip (end effector) scale factor (0.6 = default to match joint size)
+  private tipScale: number = 0.6
 
   // Getters for scaled dimensions
   public get JOINT_RADIUS(): number {

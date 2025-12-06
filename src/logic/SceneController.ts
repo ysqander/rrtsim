@@ -1630,6 +1630,13 @@ export class SceneController {
     }
   }
 
+  // Toggle visibility of the main tree mesh
+  public setTreeVisible(visible: boolean) {
+    if (this.treeMesh) {
+      this.treeMesh.visible = visible
+    }
+  }
+
   // --- EXTRA OBSTACLES MANAGEMENT ---
 
   // Clear all extra obstacles from the scene

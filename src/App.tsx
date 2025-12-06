@@ -116,6 +116,8 @@ function App() {
   const [autoSwivel, setAutoSwivel] = useState(true)
   // Show comparison with Standard RRT in step 3 (requires running Std RRT first in step 2)
   const [showComparison, setShowComparison] = useState(true)
+  // Show/hide RRT trees in steps 2 and 3
+  const [showTree, setShowTree] = useState(true)
 
   // Comparison mode progress indicator (for Step 3 tutorial mode)
   const [comparisonPhase, setComparisonPhase] = useState<
@@ -159,8 +161,8 @@ function App() {
   // Joint Width Scale (0.3 = default for thin robot)
   const [jointWidth, setJointWidth] = useState(0.3)
 
-  // Tip (End Effector) Size Scale (0.3 = default for small tip)
-  const [tipSize, setTipSize] = useState(0.3)
+  // Tip (End Effector) Size Scale (0.6 = default to match joint size)
+  const [tipSize, setTipSize] = useState(0.6)
 
   // Camera Settings
   const [cameraZoom, setCameraZoom] = useState(10)
@@ -377,9 +379,15 @@ function App() {
         setRrtParams(balancedParams)
         controllerRef.current.updateRRTParams(balancedParams)
 
-        // Zoom out to see the whole scene
-        controllerRef.current.camera.position.set(5, 5, 8)
-        controllerRef.current.camera.lookAt(0, 1, 0)
+        // Set default camera view for RRT-Connect: Zoom: 11.5, Azimuth: 32°, Polar: 67°
+        controllerRef.current.controls.target.set(0, 1, 0)
+        controllerRef.current.setCameraZoom(11.5)
+        controllerRef.current.setCameraAngle(32, 67)
+
+        // Update React state to match these defaults (syncs UI sliders)
+        setCameraZoom(11.5)
+        setCameraAzimuth(32)
+        setCameraPolar(67)
       }
     } else {
       // Intro
@@ -424,6 +432,52 @@ function App() {
     // Reset editing mode to target when changing scenarios
     setEditingTarget(true)
     controllerRef.current?.setEditingTarget(true)
+  }
+
+  const handleResetObstacle = () => {
+    if (!controllerRef.current) return
+
+    if (step === 3) {
+      // Step 3: Gate (Inverted U)
+      const defaultGateDims = {
+        gapWidth: 1.6,
+        height: 3.2,
+        pillarThickness: 0.4,
+      }
+
+      // Update Controller
+      controllerRef.current.setObstaclePreset('inverted_u', defaultGateDims)
+      controllerRef.current.setObstaclePosition(3.11, 1.15)
+      controllerRef.current.setObstacleRotation(321)
+
+      // Update State
+      setObstaclePreset('inverted_u')
+      setGateDims(defaultGateDims)
+      setObstaclePos({ x: 3.11, z: 1.15 })
+      setObstacleRotation(321)
+    } else {
+      // Step 2 (and others): Wall
+      const defaultWallDims = {
+        width: 3.0,
+        height: 3.0,
+        thickness: 0.2,
+      }
+
+      // Update Controller
+      // Note: setObstaclePreset resets position to default (1.0, 0) if preservePosition is false
+      controllerRef.current.setObstaclePreset('wall', defaultWallDims)
+      controllerRef.current.setObstacleRotation(0)
+
+      // Update State
+      setObstaclePreset('wall')
+      setWallDims(defaultWallDims)
+      setObstaclePos({ x: 1.0, z: 0 })
+      setObstacleRotation(0)
+    }
+
+    // Reset transform mode to translate for consistency
+    setObstacleTransformMode('translate')
+    controllerRef.current.setObstacleTransformMode('translate')
   }
 
   const toggleTutorialMode = () => {
@@ -1145,6 +1199,23 @@ function App() {
               use).
             </p>
 
+            <label className="toggle-row" style={{ marginBottom: '0.5rem' }}>
+              <input
+                type="checkbox"
+                checked={showTree}
+                onChange={(e) => {
+                  setShowTree(e.target.checked)
+                  controllerRef.current?.setTreeVisible(e.target.checked)
+                }}
+              />
+              <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
+                Show Search Tree
+              </span>
+            </label>
+            <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
+              Display RRT exploration tree visualization.
+            </p>
+
             <button
               onClick={() => {
                 // Reset to tutorial default based on current step
@@ -1174,6 +1245,18 @@ function App() {
               }}
             >
               Reset Robot Position
+            </button>
+            <button
+              onClick={handleResetObstacle}
+              disabled={step < 2}
+              style={{
+                width: '100%',
+                marginBottom: '0.5rem',
+                opacity: step < 2 ? 0.4 : 1,
+                cursor: step < 2 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Reset Obstacle
             </button>
           </div>
 
