@@ -4,6 +4,8 @@
 
 An interactive, 3D educational tool for understanding how robots plan movement around obstacles.
 
+![RRTsim Screenshot](screenshot.png)
+
 ## Background
 
 I started learning about robotic algorithms with Gemini 3. I initially built the 3d simulation for my own understanding, but as it came together, I decided to create an interactive tutorial to share these concepts with others.
