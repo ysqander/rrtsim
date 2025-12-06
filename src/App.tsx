@@ -101,6 +101,7 @@ const RRT_PRESETS = {
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const controllerRef = useRef<SceneController | null>(null)
+  const essayPanelRef = useRef<HTMLDivElement>(null)
   const [stats, setStats] = useState<PlannerStats | null>(null)
   // Track Standard RRT stats specifically for comparison
   const [standardStats, setStandardStats] = useState<PlannerStats | null>(null)
@@ -424,6 +425,11 @@ function App() {
 
     setStep(newStep)
     updateAlgorithmForStep(newStep)
+
+    // Scroll essay panel to top when changing steps
+    if (essayPanelRef.current) {
+      essayPanelRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+    }
   }
 
   const handleScenarioChange = (type: 'easy' | 'medium' | 'hard') => {
@@ -498,7 +504,7 @@ function App() {
 
       <div className="ui-overlay">
         {/* Left Panel: The Guide */}
-        <div className="essay-panel">
+        <div className="essay-panel" ref={essayPanelRef}>
           <div className="stepper-nav">
             <button
               className={step === 0 ? 'active' : ''}
@@ -538,18 +544,18 @@ function App() {
                   Robotics is about movement under constraints. But how do we
                   get from A to B without hitting obstacle C? In this
                   interactive tutorial, we will explore an advanced algorithm
-                  used in industrial applications that help us plan paths calls
-                  RRT-connect.
+                  used in industrial applications to plan paths, called
+                  RRT-Connect.
                   <br />
                   <br />
                   You don't need to know anything about robotics. This is a
-                  tutorial to build intuition using a multiple joint robot arm.
-                  The constraints are the number of joints, the angles that the
-                  joints can take and the length of the arms. <br />
-                  <br /> We'll start with a simplistic approach "The Greedy
-                  Approach" and see a case where it fails. Then we'll explore
-                  standard RRT (Rapidly-exploring Random Tree) and its more
-                  efficient variant RRT-Connect
+                  tutorial to build intuition using a multi-joint robot arm. The
+                  constraints include the robot's physical limits (joint angles,
+                  arm lengths) and the external obstacles it must avoid. <br />
+                  <br /> We'll start with a naive approach ("The Greedy
+                  Approach") to see where it fails. Then we'll explore Standard
+                  RRT (Rapidly-exploring Random Tree) and its more efficient
+                  variant, RRT-Connect.
                 </p>
               </div>
 
@@ -574,11 +580,11 @@ function App() {
                   between the two points is minimized.
                   <br />
                   <br />
-                  By looping through each joint, and doing this wiggle rotation
-                  adjustment at each joint, we get closer and closer. In low
-                  complexity cases, the endpoint reaches the target.
+                  By looping through each joint and making these small, local
+                  adjustments at each joint, we get closer and closer. In
+                  obstruction-free scenarios, the endpoint reaches the target.
                 </p>
-                <br />
+
                 <div className="controls-section">
                   <button
                     className="secondary-btn"
@@ -590,7 +596,7 @@ function App() {
                     Move Target Behind Wall
                   </button>
                 </div>
-                <br />
+
                 <div className="callout-box notice">
                   <strong>What to Notice</strong>
                   <p>
@@ -599,7 +605,7 @@ function App() {
                     obstacle.
                   </p>
                 </div>
-                <br />
+
                 <div className="callout-box action">
                   <strong>Try This Next</strong>
                   <p>
@@ -608,14 +614,14 @@ function App() {
                   </p>
                 </div>
 
-                <h3 style={{ marginTop: '2rem', fontSize: '1.25rem' }}>
-                  Why Greedy Fails often
-                </h3>
+                <h2 style={{ marginTop: '2rem', marginBottom: '0.5rem' }}>
+                  Why Greedy Approaches Fail
+                </h2>
                 <p className="placeholder-text">
-                  Greedy algorithms optimize for the <strong>IMMEDIATE</strong>{' '}
-                  shortest path. Each joint rotates to get the tip closer to the
-                  target right now. It doesn't "plan ahead" or realize that
-                  sometimes you need to move *away* from the target (or around a
+                  Greedy algorithms optimize for <strong>IMMEDIATE</strong>{' '}
+                  improvement. Each joint rotates to get the tip closer to the
+                  target right now. It doesn't plan ahead or realize that
+                  sometimes you need to move away from the target (or around a
                   wall) to eventually reach it.
                 </p>
               </div>
@@ -639,196 +645,215 @@ function App() {
               <div className="explanation">
                 <p>
                   This algorithm grows a tree of valid movements: essentially a
-                  map of safe places the robot has visited. It starts by picking
-                  a random joint configuration somewhere in the room. Then, it
-                  looks at its existing map (the tree) and finds the spot
-                  closest to that random point. From there, it grows a single
-                  small "twig" toward the random target. <br /> <br /> If this
+                  map of safe configurations the robot has visited. It starts by
+                  picking a random set of joint angles (a "configuration").
+                  Then, it finds the configuration in its existing tree that is
+                  closest to this random sample. From there, it grows a single
+                  small step toward that random sample. <br /> <br /> If this
                   new step doesn't hit a wall, it's added to the tree. In the
-                  next iteration, it picks a brand new random target and repeats
-                  the process, slowly building a bushy web of safe paths until
-                  one of them touches the goal.
-                  <br />
-                  <br />
-                  <div className="callout-box action">
-                    <strong>Try This Next</strong>
-                    <p>
-                      Click "Run Planner" without changing the parameters when
-                      doing it for the first time.
-                    </p>
+                  next iteration, it picks a brand new random sample and repeats
+                  the process, slowly building a bushy web of safe paths until a
+                  branch gets close enough to the goal.
+                </p>
+
+                <div className="callout-box action">
+                  <strong>Try This Next</strong>
+                  <p>
+                    Click "Run Planner" without changing the parameters when
+                    doing it for the first time.
+                  </p>
+                </div>
+                <div
+                  className="controls-section"
+                  style={{
+                    background: 'rgba(0,0,0,0.2)',
+                    padding: '1rem',
+                    borderRadius: '8px',
+                    marginTop: '1rem',
+                  }}
+                >
+                  {/* Preset Buttons */}
+                  <div className="preset-buttons">
+                    {Object.entries(RRT_PRESETS).map(([key, preset]) => (
+                      <button
+                        key={key}
+                        className={`preset-btn ${
+                          rrtParams.stepSize === preset.stepSize &&
+                          rrtParams.maxIter === preset.maxIter &&
+                          rrtParams.goalBias === preset.goalBias
+                            ? 'active'
+                            : ''
+                        }`}
+                        onClick={() =>
+                          setRrtParams({
+                            stepSize: preset.stepSize,
+                            maxIter: preset.maxIter,
+                            goalBias: preset.goalBias,
+                            seed: preset.seed,
+                          })
+                        }
+                        title={preset.description}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
                   </div>
-                  <div
-                    className="controls-section"
+
+                  <p
                     style={{
-                      background: 'rgba(0,0,0,0.2)',
-                      padding: '1rem',
-                      borderRadius: '8px',
-                      marginTop: '1rem',
+                      fontSize: '0.85rem',
+                      fontWeight: 'bold',
+                      marginBottom: '0.5rem',
                     }}
                   >
-                    {/* Preset Buttons */}
-                    <div className="preset-buttons">
-                      {Object.entries(RRT_PRESETS).map(([key, preset]) => (
-                        <button
-                          key={key}
-                          className={`preset-btn ${
-                            rrtParams.stepSize === preset.stepSize &&
-                            rrtParams.maxIter === preset.maxIter &&
-                            rrtParams.goalBias === preset.goalBias
-                              ? 'active'
-                              : ''
-                          }`}
-                          onClick={() =>
-                            setRrtParams({
-                              stepSize: preset.stepSize,
-                              maxIter: preset.maxIter,
-                              goalBias: preset.goalBias,
-                              seed: preset.seed,
-                            })
-                          }
-                          title={preset.description}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                    </div>
-                    <b>Parameters</b>
-                    <br />- <b>Step Size:</b> How far the robot reaches in each
-                    step. Larger steps jump gaps but might hit walls.
-                    <br />
-                    <div className="parameter-control">
-                      <label>Step Size: {rrtParams.stepSize}</label>
-                      <input
-                        type="range"
-                        min="0.01"
-                        max="0.5"
-                        step="0.01"
-                        value={rrtParams.stepSize}
-                        onChange={(e) =>
-                          handleParamChange(
-                            'stepSize',
-                            parseFloat(e.target.value)
-                          )
-                        }
-                      />
-                    </div>
-                    <br />- <b>Iterations:</b> How many attempts to make. More
+                    Parameters
+                  </p>
+                  <p
+                    style={{
+                      fontSize: '0.75rem',
+                      color: '#aaa',
+                      marginBottom: '0.5rem',
+                    }}
+                  >
+                    <strong>Step Size:</strong> How far the robot reaches in
+                    each step. Larger steps jump gaps but might hit walls.
+                  </p>
+                  <div className="parameter-control">
+                    <label>Step Size: {rrtParams.stepSize}</label>
+                    <input
+                      type="range"
+                      min="0.01"
+                      max="0.5"
+                      step="0.01"
+                      value={rrtParams.stepSize}
+                      onChange={(e) =>
+                        handleParamChange(
+                          'stepSize',
+                          parseFloat(e.target.value)
+                        )
+                      }
+                    />
+                  </div>
+
+                  <p
+                    style={{
+                      fontSize: '0.75rem',
+                      color: '#aaa',
+                      marginBottom: '0.5rem',
+                      marginTop: '0.75rem',
+                    }}
+                  >
+                    <strong>Iterations:</strong> How many attempts to make. More
                     attempts = higher chance of success but slower.
-                    <br />
-                    <div className="parameter-control">
-                      <label>Max Iterations: {rrtParams.maxIter}</label>
-                      <input
-                        type="range"
-                        min="1000"
-                        max="20000"
-                        step="1000"
-                        value={rrtParams.maxIter}
-                        onChange={(e) =>
-                          handleParamChange('maxIter', parseInt(e.target.value))
-                        }
-                      />
-                    </div>
-                    <div className="parameter-control">
-                      <label>
-                        Seed: {rrtParams.seed}
-                        {tutorialMode && (
-                          <span
-                            className="tiny-text"
-                            style={{ marginLeft: '0.5rem', opacity: 0.7 }}
-                          >
-                            (locked in tutorial mode)
-                          </span>
-                        )}
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="999999"
-                        value={rrtParams.seed}
-                        disabled={tutorialMode}
-                        onChange={(e) =>
-                          handleParamChange(
-                            'seed',
-                            parseInt(e.target.value) || 0
-                          )
-                        }
-                        style={{
-                          width: '100%',
-                          padding: '0.3rem',
-                          opacity: tutorialMode ? 0.5 : 1,
-                        }}
-                      />
-                    </div>
-                    <p
-                      className="tiny-text"
-                      style={{ marginTop: '0.3rem', marginBottom: '0.5rem' }}
-                    >
-                      Seed controls randomness. Same seed = same exploration
-                      pattern.
-                    </p>
-                    <button
-                      className={`primary-btn ${
-                        !stats ? 'pulse-animation' : ''
-                      }`}
-                      onClick={() => {
-                        controllerRef.current?.runPlanner()
-                        if (autoSwivel) {
-                          // Trigger the "Swivel" animation to show off the scene
-                          setTimeout(() => {
-                            controllerRef.current?.animateCameraOutro()
-                          }, 1000) // Wait 1s for tree to start appearing
-                          // Auto-disable after first use
-                          setAutoSwivel(false)
-                        }
+                  </p>
+                  <div className="parameter-control">
+                    <label>Max Iterations: {rrtParams.maxIter}</label>
+                    <input
+                      type="range"
+                      min="1000"
+                      max="20000"
+                      step="1000"
+                      value={rrtParams.maxIter}
+                      onChange={(e) =>
+                        handleParamChange('maxIter', parseInt(e.target.value))
+                      }
+                    />
+                  </div>
+                  <div className="parameter-control">
+                    <label>
+                      Seed: {rrtParams.seed}
+                      {tutorialMode && (
+                        <span
+                          className="tiny-text"
+                          style={{ marginLeft: '0.5rem', opacity: 0.7 }}
+                        >
+                          (locked in tutorial mode)
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="999999"
+                      value={rrtParams.seed}
+                      disabled={tutorialMode}
+                      onChange={(e) =>
+                        handleParamChange('seed', parseInt(e.target.value) || 0)
+                      }
+                      style={{
+                        width: '100%',
+                        padding: '0.3rem',
+                        opacity: tutorialMode ? 0.5 : 1,
                       }}
-                      style={{ width: '100%', marginTop: '1rem' }}
-                    >
-                      ▶ Run Planner
-                    </button>
+                    />
                   </div>
-                  <br />
-                  <div className="callout-box notice">
-                    <strong>What to Notice</strong>
-                    <p>
-                      See how the tree grows in all directions? This "bushy"
-                      exploration is thorough but slow. But for this "Behind the
-                      Wall" target, it will likely{' '}
-                      <b>
-                        FAIL (the robot tip will not move to the target
-                        position)
-                      </b>{' '}
-                      or time out. This is because this algorithm searches a
-                      little bit all over the place (since it picks points to
-                      extend toward randomly).
-                    </p>
-                  </div>
-                  <br />
-                  <div className="callout-box action">
-                    <strong>
-                      If it Fails to hit the target, try this next
-                    </strong>
-                    <p>
-                      Increase Step Size and Max Iterations. Can you get it to
-                      find the target? Notice how many nodes it needs.
-                    </p>
-                  </div>
-                  <br />
-                  You can play around with the target and rerun the planner to
+                  <p
+                    className="tiny-text"
+                    style={{ marginTop: '0.3rem', marginBottom: '0.5rem' }}
+                  >
+                    Seed controls randomness. Same seed = same exploration
+                    pattern.
+                  </p>
+                  <button
+                    className={`primary-btn ${!stats ? 'pulse-animation' : ''}`}
+                    onClick={() => {
+                      controllerRef.current?.runPlanner()
+                      if (autoSwivel) {
+                        // Trigger the "Swivel" animation to show off the scene
+                        setTimeout(() => {
+                          controllerRef.current?.animateCameraOutro()
+                        }, 1000) // Wait 1s for tree to start appearing
+                        // Auto-disable after first use
+                        setAutoSwivel(false)
+                      }
+                    }}
+                    style={{ width: '100%', marginTop: '1rem' }}
+                  >
+                    ▶ Run Planner
+                  </button>
+                </div>
+
+                <div className="callout-box notice">
+                  <strong>What to Notice</strong>
+                  <p>
+                    See how the tree grows in all directions? This "bushy"
+                    exploration is thorough but slow. But for this "Behind the
+                    Wall" target, it will likely{' '}
+                    <b>
+                      FAIL (the robot tip will not move to the target position)
+                    </b>{' '}
+                    or time out. Without a high Goal Bias, the algorithm
+                    explores the entire space uniformly rather than focusing
+                    specifically on the target.
+                  </p>
+                </div>
+
+                <div className="callout-box action">
+                  <strong>If it Fails to hit the target, try this next</strong>
+                  <p>
+                    Increase Step Size and Max Iterations. Can you get it to
+                    find the target? Notice how many nodes it needs.
+                  </p>
+                </div>
+
+                <p style={{ marginTop: '1rem' }}>
+                  You can play around, move the target and rerun the planner to
                   see how the algorithm behaves in different scenarios. Note:
                   you can reset the robot and the target to starting positions
                   on the right hand side.
-                  <br />
-                  <br />
-                  <b>Still Failing to reach the target?</b> If after tuning
-                  parameters it still fails, Standard RRT's uniform random
-                  exploration may not be reaching the right regions of space
-                  within the time limit. The algorithm explores everywhere
-                  equally rather than focusing toward the goal.
-                  <br />
-                  <br />
-                  Try adding a <b>Joint</b> (on the right hand side) as a final
-                  measure. Adding another degree of freedom gives the robot more
-                  ways to bend around the obstacle.
+                </p>
+
+                <p style={{ marginTop: '1rem' }}>
+                  <strong>Still Failing to reach the target?</strong> If after
+                  tuning parameters it still fails, Standard RRT's uniform
+                  random exploration may not be reaching the right regions of
+                  space within the time limit.
+                </p>
+
+                <p style={{ marginTop: '0.75rem' }}>
+                  Try adding a <strong>Joint</strong> (on the right hand side)
+                  as a final measure. Adding another degree of freedom gives the
+                  robot more ways to bend around the obstacle.
                 </p>
               </div>
 
@@ -854,7 +879,9 @@ function App() {
               <h1>3. Bi-directional RRT-Connect</h1>
 
               <div className="explanation">
-                <h3>Meeting in the Middle</h3>
+                <h2 style={{ marginBottom: '0.75rem' }}>
+                  Meeting in the Middle
+                </h2>
                 <p>
                   Bi-directional RRT-Connect is a more efficient algorithm than
                   standard RRT.
@@ -864,17 +891,14 @@ function App() {
                   from the goal. They aggressively try to meet in the middle.
                   <br />
                   <br />
-                  Each tree takes turns in doing this: One tree takes a step
-                  toward a random point and the other tree "looks" at where the
-                  new extension is and tries to extend its nearest node to it.
-                  Next, they swap roles and redo the same process.
+                  Each tree takes turns: Tree A takes a step toward a random
+                  sample. Then, instead of sampling again, Tree B tries to grow
+                  directly toward Tree A's new branch. Next, they swap roles and
+                  repeat.
                   <br />
                   <br />
-                  <span>
-                    This random turn-by-turn step and connect interplay might
-                    seem chaotic but it is actually very efficient.
-                  </span>
-                  <br />
+                  This aggressive "meet-in-the-middle" strategy is far more
+                  efficient than searching blindly.
                 </p>
 
                 {tutorialMode && (
@@ -888,26 +912,6 @@ function App() {
                     </p>
                   </div>
                 )}
-
-                {/* Comparison Toggle */}
-                <label
-                  className="toggle-row"
-                  style={{ marginTop: '1rem', marginBottom: '0.5rem' }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showComparison}
-                    onChange={(e) => {
-                      setShowComparison(e.target.checked)
-                      controllerRef.current?.setGhostTreeVisible(
-                        e.target.checked
-                      )
-                    }}
-                  />
-                  <span style={{ color: showComparison ? '#2ecc71' : '#aaa' }}>
-                    Show Comparison with Std RRT
-                  </span>
-                </label>
 
                 {/* Comparison Dashboard */}
                 {showComparison && standardStats && (
@@ -996,7 +1000,7 @@ function App() {
                     }}
                   >
                     {tutorialMode
-                      ? 'Click "Run Comparison" to see both algorithms side-by-side.'
+                      ? ''
                       : 'To see a comparison, first run Standard RRT in step 2, then return here.'}
                   </p>
                 )}
@@ -1149,6 +1153,29 @@ function App() {
                   the node count and time to Standard RRT.
                 </p>
               </div>
+
+              <div className="callout-box action">
+                <strong>Try This Next</strong>
+                <p>Explore how RRT-Connect handles different challenges:</p>
+                <ul>
+                  <li>
+                    Switch to the <strong>Corridor</strong> obstacle shape
+                    (right panel) and see how the trees navigate narrow passages
+                  </li>
+                  <li>
+                    <strong>Rotate</strong> the gate using "Edit Obstacle" →
+                    "Rotate" mode to create angled challenges
+                  </li>
+                  <li>
+                    Adjust the <strong>Gap Width</strong> to make it harder or
+                    easier for the robot to reach through
+                  </li>
+                  <li>
+                    Add or remove <strong>Joints</strong> to see how more
+                    degrees of freedom affect planning time
+                  </li>
+                </ul>
+              </div>
             </div>
           )}
         </div>
@@ -1209,12 +1236,38 @@ function App() {
                 }}
               />
               <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
-                Show Search Tree
+                Show RRT-connect Search Trees
               </span>
             </label>
             <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
               Display RRT exploration tree visualization.
             </p>
+
+            {step === 3 && (
+              <>
+                <label
+                  className="toggle-row"
+                  style={{ marginBottom: '0.5rem' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showComparison}
+                    onChange={(e) => {
+                      setShowComparison(e.target.checked)
+                      controllerRef.current?.setGhostTreeVisible(
+                        e.target.checked
+                      )
+                    }}
+                  />
+                  <span style={{ color: showComparison ? '#2ecc71' : '#aaa' }}>
+                    Show Comparison with Std RRT
+                  </span>
+                </label>
+                <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
+                  Display Standard RRT ghost tree for comparison.
+                </p>
+              </>
+            )}
 
             <button
               onClick={() => {
@@ -1957,10 +2010,10 @@ function App() {
         {/* Controls Help */}
         <div className="controls-help fade-in">
           <span>
-            <span className="key">LMB</span> Rotate
+            <span className="key">Left Click</span> Rotate
           </span>
           <span>
-            <span className="key">RMB</span> Pan
+            <span className="key">Right Click</span> Pan
           </span>
           <span>
             <span className="key">Scroll</span> Zoom

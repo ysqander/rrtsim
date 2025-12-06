@@ -124,7 +124,7 @@ export class RRTPlanner {
     }
 
     // --- STEP 1: FIND A VALID GOAL (Constraint Aware Inverse Kinematics) ---
-    // this is important for the RRT-connect version which starts exploring path from the target position as well as from the start position of the tip.
+    // This is important for the RRT-Connect version which starts exploring a path from the target position as well as from the start position of the robot.
 
     let goalAngles: number[] | null = null
 

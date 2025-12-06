@@ -531,9 +531,9 @@ export class Robot {
     return matrices
   }
 
-  // --- GENERIC IK SOLVER (CCD)  used in the Greedy approach---
-  // In simple terms, it is as if each joint in the robot arm, "looks" at the current position of the tip of the robot and the target position and decides to rotate itself to minimize tht distance.
-  // By looping through each joint, and doing this wiggle adjustments, we get closer and closer and in simple reachable cases, the end point gets to the target. It's counterintuitive that this simple approach works but it does.
+  // --- GENERIC IK SOLVER (CCD) used in the Greedy approach ---
+  // In simple terms, it is as if each joint in the robot arm "looks" at the current position of the tip of the robot and the target position and decides to rotate itself to minimize that distance.
+  // By looping through each joint and making these local adjustments, we get closer and closer. In obstruction-free scenarios, the endpoint reaches the target. It's counterintuitive that this simple approach works, but it does.
 
   public calculateIK(
     targetPos: THREE.Vector3,

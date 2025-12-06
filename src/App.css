@@ -55,11 +55,14 @@ body {
 }
 
 h1 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.5px; }
+h2 { margin: 0; font-size: 1.1rem; font-weight: 600; letter-spacing: -0.3px; }
 .subtitle { margin: 0; color: #888; font-size: 0.9rem; }
 h3 { margin: 0 0 0.5rem 0; font-size: 0.8rem; text-transform: uppercase; color: #555; letter-spacing: 1px; }
 h4 { margin: 0 0 0.4rem 0; font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
 
 p { font-size: 0.9rem; line-height: 1.5; color: #ccc; margin: 0; }
+.explanation p { margin-bottom: 0; }
+.placeholder-text { font-size: 0.9rem; line-height: 1.6; }
 .hint { font-size: 0.8rem; color: #888; font-style: italic; margin-top: 0.5rem; }
 
 /* CONTROLS */
@@ -449,12 +452,17 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     margin: 0.5rem 0;
 }
 
-.callout-box strong {
+.callout-box > strong {
     display: block;
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 0.4rem;
+}
+
+.callout-box li strong {
+    display: inline;
+    font-weight: bold;
 }
 
 .callout-box p {
@@ -469,7 +477,11 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     border-left: 3px solid #3498db;
 }
 
-.callout-box.notice strong {
+.callout-box.notice > strong {
+    color: #3498db;
+}
+
+.callout-box.notice li strong {
     color: #3498db;
 }
 
@@ -483,7 +495,11 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     border-left: 3px solid #2ecc71;
 }
 
-.callout-box.action strong {
+.callout-box.action > strong {
+    color: #2ecc71;
+}
+
+.callout-box.action li strong {
     color: #2ecc71;
 }
 
@@ -497,12 +513,32 @@ button.active { background: #3498db; color: white; border-color: #3498db; }
     border-left: 3px solid #e74c3c;
 }
 
-.callout-box.error strong {
+.callout-box.error > strong {
+    color: #e74c3c;
+}
+
+.callout-box.error li strong {
     color: #e74c3c;
 }
 
 .callout-box.error p {
     color: #f5b8b8;
+}
+
+/* Lists inside callout boxes */
+.callout-box ul {
+    margin: 0.5rem 0 0 0;
+    padding-left: 1.2rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.callout-box li {
+    margin-bottom: 0.4rem;
+}
+
+.callout-box li:last-child {
+    margin-bottom: 0;
 }
 
 /* Suggestions list inside error callout */
