@@ -135,8 +135,8 @@ function App() {
 
   // Shape-specific dimension state
   const [wallDims, setWallDims] = useState({
-    width: 2.0,
-    height: 2.0,
+    width: 3.0,
+    height: 3.0,
     thickness: 0.2,
   })
   const [gateDims, setGateDims] = useState({
@@ -151,7 +151,21 @@ function App() {
   })
 
   // Joint Count (displayed next to Robot section)
-  const [jointCount, setJointCount] = useState(4) // Default robot has 4 joints
+  const [jointCount, setJointCount] = useState(9) // Default robot has 9 joints
+
+  // Arm Length Scale (0.7 = default for thinner robot)
+  const [armLength, setArmLength] = useState(0.7)
+
+  // Joint Width Scale (0.3 = default for thin robot)
+  const [jointWidth, setJointWidth] = useState(0.3)
+
+  // Tip (End Effector) Size Scale (0.3 = default for small tip)
+  const [tipSize, setTipSize] = useState(0.3)
+
+  // Camera Settings
+  const [cameraZoom, setCameraZoom] = useState(10)
+  const [cameraAzimuth, setCameraAzimuth] = useState(0)
+  const [cameraPolar, setCameraPolar] = useState(45)
 
   // 0: Intro, 1: Greedy IK, 2: Standard RRT, 3: RRT-Connect
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0)
@@ -182,6 +196,11 @@ function App() {
     controller.onTargetMove = setTargetPos
     controller.onObstacleMove = (pos) => setObstaclePos(pos)
     controller.onObstacleRotate = (rotation) => setObstacleRotation(rotation)
+    controller.onCameraChange = (data) => {
+      setCameraZoom(data.zoom)
+      setCameraAzimuth(data.azimuth)
+      setCameraPolar(data.polar)
+    }
 
     // Comparison mode callbacks (for Step 3 fair comparison)
     controller.onComparisonProgress = (phase) => setComparisonPhase(phase)
@@ -189,6 +208,12 @@ function App() {
 
     // Get initial joint count
     setJointCount(controller.getJointCount())
+
+    // Set initial joint width (default is 0.6, thinner than original)
+    controller.setJointWidth(jointWidth)
+
+    // Set initial tip size (default is 1.0)
+    controller.setTipSize(tipSize)
 
     // Initial Scenario
     controller.setScenario(scenario)
@@ -232,6 +257,15 @@ function App() {
       controllerRef.current.animateCameraIntro()
 
       if (tutorialMode) {
+        // Reset joints to default, then reduce to 4 joints for simplicity
+        controllerRef.current.resetJoints()
+        // Remove joints until we have 4 (default is 9, so remove 5)
+        for (let i = 0; i < 5; i++) {
+          controllerRef.current.removeJoint()
+        }
+        controllerRef.current.resetRobotPosition()
+        setJointCount(controllerRef.current.getJointCount())
+
         // HARDCODED FAIL CASE:
         // Wall is at z=1. Robot at z=0.
         // Target at (0.5, 1.5, 2.0) -> Behind wall.
@@ -245,9 +279,15 @@ function App() {
       console.log('[DEBUG] setAlgorithm done')
       controllerRef.current.setInteraction(true)
 
-      // Zoom out slightly to see the whole robot
-      controllerRef.current.camera.position.set(4, 4, 8)
-      controllerRef.current.camera.lookAt(0, 1, 0)
+      // Set default camera view for Standard RRT: Zoom: 12.6, Azimuth: 347°, Polar: 63°
+      controllerRef.current.controls.target.set(0, 1, 0)
+      controllerRef.current.setCameraZoom(12.6)
+      controllerRef.current.setCameraAngle(347, 63)
+
+      // Update React state to match these defaults (syncs UI sliders)
+      setCameraZoom(12.6)
+      setCameraAzimuth(347)
+      setCameraPolar(63)
 
       if (tutorialMode) {
         console.log('[DEBUG] Tutorial mode: resetting scene')
@@ -298,11 +338,8 @@ function App() {
         // Setup a gate environment for RRT-Connect demo
         // This showcases how both trees grow toward each other through the gap
 
-        // Reset joints and add extra joints for 6 DOF robot
+        // Reset joints to default 9-joint configuration
         controllerRef.current.resetJoints()
-        // Add 2 extra joints to get 6 DOF (default is 4)
-        controllerRef.current.addJoint()
-        controllerRef.current.addJoint()
         setJointCount(controllerRef.current.getJointCount())
 
         // Use inverted_u (gate) preset
@@ -1339,8 +1376,8 @@ function App() {
                   </label>
                   <input
                     type="range"
-                    min="0.5"
-                    max="4.0"
+                    min="1.0"
+                    max="5.0"
                     step="0.1"
                     value={wallDims.width}
                     onChange={(e) => {
@@ -1361,8 +1398,8 @@ function App() {
                   </label>
                   <input
                     type="range"
-                    min="0.5"
-                    max="4.0"
+                    min="1.0"
+                    max="5.0"
                     step="0.1"
                     value={wallDims.height}
                     onChange={(e) => {
@@ -1575,11 +1612,159 @@ function App() {
                   controllerRef.current?.resetJoints()
                   if (controllerRef.current) {
                     setJointCount(controllerRef.current.getJointCount())
+                    // Reset arm length, joint width, and tip size to current values when resetting joints
+                    setArmLength(controllerRef.current.getArmLength())
+                    setJointWidth(controllerRef.current.getJointWidth())
+                    setTipSize(controllerRef.current.getTipSize())
                   }
                 }}
               >
                 Reset
               </button>
+            </div>
+
+            {/* Arm Length Slider */}
+            <div className="parameter-control" style={{ marginTop: '0.75rem' }}>
+              <label style={{ fontSize: '0.75rem' }}>
+                Arm Length: {armLength.toFixed(1)}x
+              </label>
+              <input
+                type="range"
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={armLength}
+                onChange={(e) => {
+                  const scale = parseFloat(e.target.value)
+                  setArmLength(scale)
+                  controllerRef.current?.setArmLength(scale)
+                }}
+              />
+              <p
+                className="tiny-text"
+                style={{ marginTop: '0.2rem', color: '#888' }}
+              >
+                Shorter arms can fit through narrower gaps.
+              </p>
+            </div>
+
+            {/* Joint Width Slider */}
+            <div className="parameter-control" style={{ marginTop: '0.75rem' }}>
+              <label style={{ fontSize: '0.75rem' }}>
+                Joint Size: {jointWidth.toFixed(1)}x
+              </label>
+              <input
+                type="range"
+                min="0.2"
+                max="1.5"
+                step="0.1"
+                value={jointWidth}
+                onChange={(e) => {
+                  const scale = parseFloat(e.target.value)
+                  setJointWidth(scale)
+                  controllerRef.current?.setJointWidth(scale)
+                }}
+              />
+              <p
+                className="tiny-text"
+                style={{ marginTop: '0.2rem', color: '#888' }}
+              >
+                Thinner joints/arms reduce collision volume.
+              </p>
+            </div>
+
+            {/* Tip Size Slider */}
+            <div className="parameter-control" style={{ marginTop: '0.75rem' }}>
+              <label style={{ fontSize: '0.75rem' }}>
+                Tip Size: {tipSize.toFixed(1)}x
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="2.0"
+                step="0.1"
+                value={tipSize}
+                onChange={(e) => {
+                  const scale = parseFloat(e.target.value)
+                  setTipSize(scale)
+                  controllerRef.current?.setTipSize(scale)
+                }}
+              />
+              <p
+                className="tiny-text"
+                style={{ marginTop: '0.2rem', color: '#888' }}
+              >
+                Smaller tip can fit through tighter spaces.
+              </p>
+            </div>
+          </div>
+
+          {/* Camera Settings */}
+          <div
+            className={`control-group ${
+              !isInteractiveStep ? 'gated-control' : ''
+            }`}
+          >
+            <h4>Camera Settings</h4>
+
+            <div
+              className="parameter-control"
+              style={{ marginBottom: '0.5rem' }}
+            >
+              <label style={{ fontSize: '0.75rem' }}>
+                Zoom: {cameraZoom.toFixed(1)}
+              </label>
+              <input
+                type="range"
+                min="2"
+                max="20"
+                step="0.5"
+                value={cameraZoom}
+                onChange={(e) => {
+                  const zoom = parseFloat(e.target.value)
+                  setCameraZoom(zoom)
+                  controllerRef.current?.setCameraZoom(zoom)
+                }}
+              />
+            </div>
+
+            <div
+              className="parameter-control"
+              style={{ marginBottom: '0.5rem' }}
+            >
+              <label style={{ fontSize: '0.75rem' }}>
+                Orbit (Azimuth): {cameraAzimuth.toFixed(0)}°
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="360"
+                step="1"
+                value={cameraAzimuth}
+                onChange={(e) => {
+                  const azimuth = parseFloat(e.target.value)
+                  setCameraAzimuth(azimuth)
+                  controllerRef.current?.setCameraAngle(azimuth, cameraPolar)
+                }}
+              />
+            </div>
+
+            <div className="parameter-control">
+              <label style={{ fontSize: '0.75rem' }}>
+                Elevation (Polar): {cameraPolar.toFixed(0)}°
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="90"
+                step="1"
+                value={cameraPolar}
+                onChange={(e) => {
+                  const polar = parseFloat(e.target.value)
+                  setCameraPolar(polar)
+                  controllerRef.current?.setCameraAngle(cameraAzimuth, polar)
+                }}
+              />
             </div>
           </div>
         </div>

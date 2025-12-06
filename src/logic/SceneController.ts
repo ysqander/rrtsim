@@ -81,6 +81,9 @@ export class SceneController {
     | null = null
   public onObstacleMove: ((pos: { x: number; z: number }) => void) | null = null
   public onObstacleRotate: ((rotation: number) => void) | null = null
+  public onCameraChange:
+    | ((data: { zoom: number; azimuth: number; polar: number }) => void)
+    | null = null
 
   // Comparison mode callbacks
   public onComparisonProgress:
@@ -183,6 +186,31 @@ export class SceneController {
 
     // 3. Controls
     this.controls = new OrbitControls(this.camera, canvas)
+
+    // Listen for camera changes
+    this.controls.addEventListener('change', () => {
+      if (this.onCameraChange) {
+        const distance = this.camera.position.distanceTo(this.controls.target)
+        const azimuth =
+          Math.atan2(
+            this.camera.position.x - this.controls.target.x,
+            this.camera.position.z - this.controls.target.z
+          ) *
+          (180 / Math.PI)
+        const polar =
+          Math.acos(
+            (this.camera.position.y - this.controls.target.y) / distance
+          ) *
+          (180 / Math.PI)
+
+        this.onCameraChange({
+          zoom: distance,
+          azimuth: (azimuth + 360) % 360,
+          polar: polar,
+        })
+      }
+    })
+
     this.transformControl = new TransformControls(this.camera, canvas)
     this.transformControl.addEventListener('dragging-changed', (event) => {
       this.controls.enabled = !event.value
@@ -303,11 +331,25 @@ export class SceneController {
   }
 
   public animateCameraOutro() {
-    const radius = 8 // Zoomed out further
-    const height = 4 // Higher up
-    // Full 360 orbit
-    const startAngle = 0
-    const endAngle = Math.PI * 2
+    // Start from the default Standard RRT view:
+    // Zoom: 12.6, Azimuth: 347°, Polar: 63°
+    const startZoom = 12.6
+    const startAzimuthDeg = 347
+    const startPolarDeg = 63
+
+    // Convert to radians
+    const startAzimuthRad = (startAzimuthDeg * Math.PI) / 180
+    const startPolarRad = (startPolarDeg * Math.PI) / 180
+
+    // Calculate starting position in spherical coordinates
+    const startX =
+      startZoom * Math.sin(startPolarRad) * Math.sin(startAzimuthRad)
+    const startY = startZoom * Math.cos(startPolarRad)
+    const startZ =
+      startZoom * Math.sin(startPolarRad) * Math.cos(startAzimuthRad)
+
+    // Full 360 degree orbit from the starting azimuth
+    const endAngle = startAzimuthRad + Math.PI * 2
 
     const duration = 8000 // 8 seconds
     const start = performance.now()
@@ -315,16 +357,14 @@ export class SceneController {
     const orbit = () => {
       const now = performance.now()
       const t = Math.min((now - start) / duration, 1)
-      // Ease in-out cubic
-      // const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
       // Linear is better for continuous rotation
       const ease = t
 
-      const angle = startAngle + (endAngle - startAngle) * ease
-      const x = Math.sin(angle) * radius
-      const z = Math.cos(angle) * radius
+      const angle = startAzimuthRad + (endAngle - startAzimuthRad) * ease
+      const x = startZoom * Math.sin(startPolarRad) * Math.sin(angle)
+      const z = startZoom * Math.sin(startPolarRad) * Math.cos(angle)
 
-      this.camera.position.set(x, height, z)
+      this.camera.position.set(x, startY, z)
       this.camera.lookAt(0, 1, 0)
 
       if (t < 1) {
@@ -374,6 +414,78 @@ export class SceneController {
   }
 
   /**
+   * Set the arm length scale for the robot.
+   * @param scale Scale factor (1.0 = default, 0.5 = half length, 2.0 = double length)
+   */
+  public setArmLength(scale: number) {
+    this.robot.setArmLengthScale(scale)
+    this.ghostRobot.setArmLengthScale(scale)
+    this.makeGhost(this.ghostRobot.sceneObject)
+
+    // Force scene graph update
+    this.scene.updateMatrixWorld(true)
+
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
+  }
+
+  /**
+   * Get the current arm length scale.
+   */
+  public getArmLength(): number {
+    return this.robot.getArmLengthScale()
+  }
+
+  /**
+   * Set the joint/arm thickness scale for the robot.
+   * @param scale Scale factor (1.0 = default, 0.6 = thinner, 0.2 = very thin)
+   */
+  public setJointWidth(scale: number) {
+    this.robot.setJointScale(scale)
+    this.ghostRobot.setJointScale(scale)
+    this.makeGhost(this.ghostRobot.sceneObject)
+
+    // Force scene graph update
+    this.scene.updateMatrixWorld(true)
+
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
+  }
+
+  /**
+   * Get the current joint/arm thickness scale.
+   */
+  public getJointWidth(): number {
+    return this.robot.getJointScale()
+  }
+
+  /**
+   * Set the tip (end effector) size scale for the robot.
+   * @param scale Scale factor (1.0 = default, 0.1 = very small, 2.0 = large)
+   */
+  public setTipSize(scale: number) {
+    this.robot.setTipScale(scale)
+    this.ghostRobot.setTipScale(scale)
+    this.makeGhost(this.ghostRobot.sceneObject)
+
+    // Force scene graph update
+    this.scene.updateMatrixWorld(true)
+
+    if (this.algorithm === 'greedy') {
+      this.runPlanner()
+    }
+  }
+
+  /**
+   * Get the current tip (end effector) size scale.
+   */
+  public getTipSize(): number {
+    return this.robot.getTipScale()
+  }
+
+  /**
    * Returns the number of moving joints (degrees of freedom) on the robot.
    * Useful for displaying in the UI.
    */
@@ -417,8 +529,9 @@ export class SceneController {
 
   // --- NEW: SCENARIO MANAGER ---
   public setScenario(type: 'easy' | 'medium' | 'hard') {
-    // Reset everything
-    this.robot.setAngles([0, 0, 0, 0, 0])
+    // Reset everything - use actual DoF for angles array
+    const dof = this.robot.getDoF()
+    this.robot.setAngles(new Array(dof).fill(0))
     this.plannedPath = []
     if (this.treeMesh) {
       this.scene.remove(this.treeMesh)
@@ -514,7 +627,9 @@ export class SceneController {
     }
 
     if (reset) {
-      this.robot.setAngles([0, 0, 0, 0, 0]) // Reset to home
+      // Reset to home position - use actual DoF for angles array
+      const dof = this.robot.getDoF()
+      this.robot.setAngles(new Array(dof).fill(0))
       this.robot.setOverrideColor(null) // Reset color
       // Note: We do NOT reset the target position, so it stays in the "stuck" spot
     }
@@ -1419,6 +1534,43 @@ export class SceneController {
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(width, height)
+  }
+
+  /**
+   * Set the camera zoom (distance from target).
+   * @param distance Distance in world units (typically 2-20)
+   */
+  public setCameraZoom(distance: number) {
+    const direction = new THREE.Vector3()
+    direction.subVectors(this.camera.position, this.controls.target).normalize()
+    this.camera.position
+      .copy(this.controls.target)
+      .addScaledVector(direction, distance)
+    this.camera.updateProjectionMatrix()
+  }
+
+  /**
+   * Set the camera angle (orbit position).
+   * @param azimuth Horizontal angle in degrees (0-360)
+   * @param polar Vertical angle in degrees (0-90, where 0 is looking down from top)
+   */
+  public setCameraAngle(azimuth: number, polar: number) {
+    const distance = this.camera.position.distanceTo(this.controls.target)
+    const azimuthRad = (azimuth * Math.PI) / 180
+    const polarRad = (polar * Math.PI) / 180
+
+    // Convert spherical to cartesian coordinates
+    const x =
+      this.controls.target.x +
+      distance * Math.sin(polarRad) * Math.sin(azimuthRad)
+    const y = this.controls.target.y + distance * Math.cos(polarRad)
+    const z =
+      this.controls.target.z +
+      distance * Math.sin(polarRad) * Math.cos(azimuthRad)
+
+    this.camera.position.set(x, y, z)
+    this.camera.lookAt(this.controls.target)
+    this.camera.updateProjectionMatrix()
   }
 
   // Helpers

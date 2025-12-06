@@ -19,7 +19,7 @@ export type OBBObstacle = {
   matrix: number[] // 16-length world matrix (row-major from Matrix4.toArray())
 }
 
-// Default robot configuration
+// Default robot configuration (9 joints for better flexibility)
 const DEFAULT_CONFIG: LinkConfig[] = [
   {
     name: 'Base',
@@ -68,6 +68,56 @@ const DEFAULT_CONFIG: LinkConfig[] = [
     color: 0xe67e22,
     limit: [-1.5, 1.5],
   },
+  // Joint 5
+  {
+    name: 'Joint 5',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 1.0, 0],
+    visualLength: 1.0,
+    color: 0x9b59b6,
+    limit: [-2.0, 2.0],
+  },
+  // Joint 6
+  {
+    name: 'Joint 6',
+    type: 'revolute',
+    axis: 'y',
+    offset: [0, 1.0, 0],
+    visualLength: 1.0,
+    color: 0x1abc9c,
+    limit: [-2.0, 2.0],
+  },
+  // Joint 7
+  {
+    name: 'Joint 7',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 1.0, 0],
+    visualLength: 1.0,
+    color: 0xe91e63,
+    limit: [-2.0, 2.0],
+  },
+  // Joint 8
+  {
+    name: 'Joint 8',
+    type: 'revolute',
+    axis: 'y',
+    offset: [0, 1.0, 0],
+    visualLength: 1.0,
+    color: 0x00bcd4,
+    limit: [-2.0, 2.0],
+  },
+  // Joint 9
+  {
+    name: 'Joint 9',
+    type: 'revolute',
+    axis: 'z',
+    offset: [0, 1.0, 0],
+    visualLength: 1.0,
+    color: 0xff5722,
+    limit: [-2.0, 2.0],
+  },
   {
     name: 'Tip',
     type: 'fixed',
@@ -85,9 +135,32 @@ export class Robot {
   private joints: THREE.Group[] = []
   public endEffector!: THREE.Mesh
 
-  // Constants for visual and collision
-  public readonly JOINT_RADIUS = 0.4
-  public readonly ARM_WIDTH = 0.3
+  // Base constants for visual and collision (before scaling)
+  private readonly BASE_JOINT_RADIUS = 0.4
+  private readonly BASE_ARM_WIDTH = 0.3
+  private readonly BASE_TIP_RADIUS = 0.2
+
+  // Arm length scale factor (0.7 = default for thinner robot, 0.5 = half length, 2.0 = double length)
+  private armScale: number = 0.7
+
+  // Joint/arm thickness scale factor (0.3 = default for thin robot)
+  private jointScale: number = 0.3
+
+  // Tip (end effector) scale factor (0.3 = default for small tip)
+  private tipScale: number = 0.3
+
+  // Getters for scaled dimensions
+  public get JOINT_RADIUS(): number {
+    return this.BASE_JOINT_RADIUS * this.jointScale
+  }
+
+  public get ARM_WIDTH(): number {
+    return this.BASE_ARM_WIDTH * this.jointScale
+  }
+
+  public get TIP_RADIUS(): number {
+    return this.BASE_TIP_RADIUS * this.tipScale
+  }
 
   // ==========================================================================
   // COLLISION DETECTION PARAMETERS
@@ -120,67 +193,17 @@ export class Robot {
   private readonly SELF_COLLISION_TRIM = 0.15
 
   // JOINT parameters - public for serialization to worker
-  public CONFIG: LinkConfig[] = [
-    {
-      name: 'Base',
-      type: 'fixed',
-      offset: [0, 0.25, 0],
-      visualLength: 0.5,
-      color: 0x333333,
-    },
-    // Waist: Full 360 allowed (-PI to PI)
-    {
-      name: 'Waist',
-      type: 'revolute',
-      axis: 'y',
-      offset: [0, 0.25, 0],
-      visualLength: 0.5,
-      color: 0x333333,
-      limit: [-3.14, 3.14],
-    },
-    // Shoulder: Can't bend through floor. -90 deg to +90 deg
-    {
-      name: 'Shoulder',
-      type: 'revolute',
-      axis: 'z',
-      offset: [0, 0.5, 0],
-      visualLength: 1.5,
-      color: 0x3498db,
-      limit: [-1.5, 1.5],
-    },
-    // Elbow: 0 to 150 degrees
-    {
-      name: 'Elbow',
-      type: 'revolute',
-      axis: 'z',
-      offset: [0, 1.5, 0],
-      visualLength: 1.5,
-      color: 0x3498db,
-      limit: [-0.1, 2.6],
-    },
-    // Wrist: -90 to +90
-    {
-      name: 'Wrist',
-      type: 'revolute',
-      axis: 'z',
-      offset: [0, 1.5, 0],
-      visualLength: 1.0,
-      color: 0xe67e22,
-      limit: [-1.5, 1.5],
-    },
-    {
-      name: 'Tip',
-      type: 'fixed',
-      offset: [0, 1.0, 0],
-      visualLength: 0.2,
-      color: 0xffff00,
-    },
-  ]
+  // Initialized from DEFAULT_CONFIG (deep copy to avoid mutation)
+  public CONFIG: LinkConfig[] = JSON.parse(JSON.stringify(DEFAULT_CONFIG))
 
   constructor(config?: LinkConfig[]) {
     this.sceneObject = new THREE.Group()
     if (config) {
       this.CONFIG = config
+    }
+    // Apply default arm scale to CONFIG before building visuals
+    if (this.armScale !== 1.0) {
+      this.applyArmScale()
     }
     this.initRobot()
   }
@@ -219,13 +242,16 @@ export class Robot {
     // Default visual length for parent if not defined (should be defined)
     const parentLength = parentConfig?.visualLength || 1.0
 
+    // Apply arm scale to new joint's length
+    const newJointLength = 1.0 * this.armScale
+
     const newJoint: LinkConfig = {
       name: `Joint ${newJointIndex}`,
       type: 'revolute',
       axis: Math.random() > 0.5 ? 'z' : 'y',
       // IMPORTANT: Offset is determined by PARENT'S length
       offset: [0, parentLength, 0],
-      visualLength: 1.0, // Standard length for new joints
+      visualLength: newJointLength, // Scaled length for new joints
       color: Math.random() * 0xffffff,
       limit: [-2.0, 2.0],
     }
@@ -270,7 +296,109 @@ export class Robot {
   public resetConfig() {
     // Reset to default config (deep copy to avoid mutation)
     this.CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG))
+    // Re-apply current arm scale after reset
+    if (this.armScale !== 1.0) {
+      this.applyArmScale()
+    }
+    // Joint scale is preserved through rebuild() automatically via getters
     this.rebuild()
+  }
+
+  /**
+   * Set the arm length scale factor.
+   * @param scale Scale factor (1.0 = default, 0.5 = half length, 2.0 = double length)
+   */
+  public setArmLengthScale(scale: number) {
+    this.armScale = Math.max(0.3, Math.min(2.5, scale)) // Clamp to safe range
+    this.applyArmScale()
+    this.rebuild()
+  }
+
+  /**
+   * Get the current arm length scale factor.
+   */
+  public getArmLengthScale(): number {
+    return this.armScale
+  }
+
+  /**
+   * Set the joint/arm thickness scale factor.
+   * @param scale Scale factor (1.0 = default, 0.6 = thinner, 0.2 = very thin)
+   */
+  public setJointScale(scale: number) {
+    this.jointScale = Math.max(0.1, Math.min(2.0, scale)) // Clamp to safe range
+    this.rebuild()
+  }
+
+  /**
+   * Get the current joint/arm thickness scale factor.
+   */
+  public getJointScale(): number {
+    return this.jointScale
+  }
+
+  /**
+   * Set the tip (end effector) scale factor.
+   * @param scale Scale factor (1.0 = default, 0.1 = very small, 2.0 = large)
+   */
+  public setTipScale(scale: number) {
+    this.tipScale = Math.max(0.05, Math.min(3.0, scale)) // Clamp to safe range
+    this.rebuild()
+  }
+
+  /**
+   * Get the current tip (end effector) scale factor.
+   */
+  public getTipScale(): number {
+    return this.tipScale
+  }
+
+  /**
+   * Apply the arm scale to the CONFIG.
+   * Scales the visualLength of arm segments and updates offsets accordingly.
+   */
+  private applyArmScale() {
+    // Base lengths for each segment type (from DEFAULT_CONFIG)
+    const baseLengths: Record<string, number> = {
+      Base: 0.5,
+      Waist: 0.5,
+      Shoulder: 1.5,
+      Elbow: 1.5,
+      Wrist: 1.0,
+      'Joint 5': 1.0,
+      'Joint 6': 1.0,
+      'Joint 7': 1.0,
+      'Joint 8': 1.0,
+      'Joint 9': 1.0,
+      Tip: 0.2,
+    }
+
+    // First pass: Update visualLength for scalable segments
+    for (let i = 0; i < this.CONFIG.length; i++) {
+      const cfg = this.CONFIG[i]!
+      const baseLength = baseLengths[cfg.name] ?? 1.0 // Default for dynamically added joints
+
+      // Only scale arm segments (not Base, Waist, or Tip)
+      if (
+        cfg.name !== 'Base' &&
+        cfg.name !== 'Waist' &&
+        cfg.name !== 'Tip' &&
+        cfg.visualLength !== undefined
+      ) {
+        cfg.visualLength = baseLength * this.armScale
+      }
+    }
+
+    // Second pass: Update offsets based on parent's visualLength
+    for (let i = 1; i < this.CONFIG.length; i++) {
+      const parentCfg = this.CONFIG[i - 1]!
+      const cfg = this.CONFIG[i]!
+
+      // Offset Y should match parent's visual length
+      if (parentCfg.visualLength !== undefined) {
+        cfg.offset = [0, parentCfg.visualLength, 0]
+      }
+    }
   }
 
   private rebuild() {
@@ -325,7 +453,7 @@ export class Robot {
           )
         } else if (cfg.name === 'Tip') {
           this.endEffector = new THREE.Mesh(
-            new THREE.SphereGeometry(0.2),
+            new THREE.SphereGeometry(this.TIP_RADIUS),
             material
           )
           mesh = this.endEffector // Track the tip
@@ -887,14 +1015,20 @@ export class Robot {
       if (cfg.type === 'revolute' || index === this.CONFIG.length - 1) {
         const jointPos = joints[index]
         if (jointPos) {
+          // Use different radius for tip vs regular joints
+          const isTip = index === this.CONFIG.length - 1
+          const checkRadius = isTip
+            ? this.TIP_RADIUS + this.OBSTACLE_COLLISION_MARGIN
+            : jointRadius
+
           // Check against OBBs first
           for (const obb of obbObstacles) {
-            if (this.intersectsSphereOBB(jointPos, jointRadius, obb)) {
+            if (this.intersectsSphereOBB(jointPos, checkRadius, obb)) {
               return true // HIT!
             }
           }
           // Then check against AABBs
-          const sphere = new THREE.Sphere(jointPos, jointRadius)
+          const sphere = new THREE.Sphere(jointPos, checkRadius)
           for (const box of boxObstacles) {
             if (box.intersectsSphere(sphere)) {
               return true // HIT!
