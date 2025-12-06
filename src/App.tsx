@@ -110,7 +110,6 @@ function App() {
     y: number
     z: number
   } | null>(null)
-  const [scenario, setScenario] = useState<'easy' | 'medium' | 'hard'>('medium')
   // Tutorial Mode: If true, enforces lesson scenarios. If false, allows free exploration.
   const [tutorialMode, setTutorialMode] = useState(true)
   // Auto-Swivel: Automatically orbit camera after running planner (once, then auto-disables)
@@ -119,6 +118,8 @@ function App() {
   const [showComparison, setShowComparison] = useState(true)
   // Show/hide RRT trees in steps 2 and 3
   const [showTree, setShowTree] = useState(true)
+  // Track if planner is currently running (for Step 2 button UI)
+  const [isPlanning, setIsPlanning] = useState(false)
 
   // Comparison mode progress indicator (for Step 3 tutorial mode)
   const [comparisonPhase, setComparisonPhase] = useState<
@@ -218,8 +219,6 @@ function App() {
     // Set initial tip size (default is 1.0)
     controller.setTipSize(tipSize)
 
-    // Initial Scenario
-    controller.setScenario(scenario)
     controller.setAlgorithm('rrt') // Default background mode
     controller.setInteraction(false) // Disable interaction for Intro
 
@@ -236,6 +235,11 @@ function App() {
     if (controllerRef.current) {
       controllerRef.current.onStatsUpdate = (newStats) => {
         setStats(newStats)
+        // Only mark planning as complete when we have actual results (time > 0)
+        // time === 0 means planning is still in progress (sent by worker start)
+        if (newStats.time > 0) {
+          setIsPlanning(false)
+        }
       }
     }
   }, [step])
@@ -431,14 +435,6 @@ function App() {
     if (essayPanelRef.current) {
       essayPanelRef.current.scrollTo({ top: 0, behavior: 'smooth' })
     }
-  }
-
-  const handleScenarioChange = (type: 'easy' | 'medium' | 'hard') => {
-    setScenario(type)
-    controllerRef.current?.setScenario(type)
-    // Reset editing mode to target when changing scenarios
-    setEditingTarget(true)
-    controllerRef.current?.setEditingTarget(true)
   }
 
   const handleResetObstacle = () => {
@@ -796,8 +792,11 @@ function App() {
                     pattern.
                   </p>
                   <button
-                    className={`primary-btn ${!stats ? 'pulse-animation' : ''}`}
+                    className={`primary-btn ${
+                      !stats && !isPlanning ? 'pulse-animation' : ''
+                    }`}
                     onClick={() => {
+                      setIsPlanning(true)
                       controllerRef.current?.runPlanner()
                       if (autoSwivel) {
                         // Trigger the "Swivel" animation to show off the scene
@@ -808,9 +807,17 @@ function App() {
                         setAutoSwivel(false)
                       }
                     }}
-                    style={{ width: '100%', marginTop: '1rem' }}
+                    disabled={isPlanning}
+                    style={{
+                      width: '100%',
+                      marginTop: '1rem',
+                      backgroundColor: isPlanning ? '#666' : undefined,
+                      cursor: isPlanning ? 'not-allowed' : 'pointer',
+                    }}
                   >
-                    ▶ Run Planner
+                    {isPlanning
+                      ? '⏳ Running Standard RRT...'
+                      : '▶ Run Planner'}
                   </button>
                 </div>
 
@@ -1238,7 +1245,9 @@ function App() {
                 }}
               />
               <span style={{ color: showTree ? '#2ecc71' : '#aaa' }}>
-                Show RRT-connect search trees
+                {step === 3
+                  ? 'Show/hide RRT-connect search trees'
+                  : 'Show/hide RRT search tree'}
               </span>
             </label>
             <p className="tiny-text" style={{ marginBottom: '0.8rem' }}>
@@ -1313,42 +1322,6 @@ function App() {
             >
               Reset Obstacle
             </button>
-          </div>
-
-          <div
-            className={`control-group ${
-              !isInteractiveStep ? 'gated-control' : ''
-            }`}
-          >
-            <h4>Scenario</h4>
-            <div className="button-group">
-              <button
-                className={scenario === 'easy' ? 'active' : ''}
-                onClick={() => handleScenarioChange('easy')}
-                disabled={step === 1}
-                style={
-                  step === 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}
-                }
-              >
-                Free
-              </button>
-              <button
-                className={scenario === 'medium' ? 'active' : ''}
-                onClick={() => handleScenarioChange('medium')}
-              >
-                Wall
-              </button>
-              <button
-                className={scenario === 'hard' ? 'active' : ''}
-                onClick={() => handleScenarioChange('hard')}
-                disabled={step === 1}
-                style={
-                  step === 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}
-                }
-              >
-                Deep
-              </button>
-            </div>
           </div>
 
           {targetPos && (
