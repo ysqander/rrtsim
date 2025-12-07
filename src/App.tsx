@@ -280,11 +280,9 @@ function App() {
         controllerRef.current.resetRobotPosition()
         setJointCount(controllerRef.current.getJointCount())
 
-        // HARDCODED FAIL CASE:
-        // Wall is at z=1. Robot at z=0.
-        // Target at (0.5, 1.5, 2.0) -> Behind wall.
-        // Robot tries to go straight -> Collision.
-        controllerRef.current.setTargetPosition(0.39, 1.65, 2.0)
+        // Start with target in a reachable position (not behind wall)
+        // User can press "Move Target Behind Wall" button to see the fail case
+        controllerRef.current.setTargetPosition(-2.11, 2.04, 0.19)
       }
     } else if (newStep === 2) {
       // Switching to Standard RRT (The "Bushy" Tree)
@@ -620,7 +618,7 @@ function App() {
                   <button
                     className="secondary-btn"
                     onClick={() => {
-                      controllerRef.current?.setTargetPosition(2.24, 2.59, 2.0)
+                      controllerRef.current?.setTargetPosition(0.41, 1.88, 1.8)
                     }}
                     style={{ marginTop: '10px' }}
                   >
@@ -1353,8 +1351,8 @@ function App() {
               onClick={() => {
                 // Reset to tutorial default based on current step
                 if (step === 1) {
-                  // Greedy step: target behind wall
-                  controllerRef.current?.setTargetPosition(0.39, 1.65, 2.0)
+                  // Greedy step: starting position (reachable, not behind wall)
+                  controllerRef.current?.setTargetPosition(-2.11, 2.04, 0.19)
                 } else if (step === 3) {
                   // RRT-Connect step: target behind gate
                   controllerRef.current?.setTargetPosition(3.31, 1.53, 1.88)
