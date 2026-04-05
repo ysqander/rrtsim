@@ -4,6 +4,8 @@
 
 An interactive, 3D educational tool for understanding how robots plan movement around obstacles.
 
+**Live demo: [alexadamov.com/rrtsim](https://alexadamov.com/rrtsim/)**
+
 ![RRTsim Screenshot](screenshot.png)
 
 ## Background
